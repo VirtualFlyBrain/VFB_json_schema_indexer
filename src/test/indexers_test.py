@@ -13,6 +13,7 @@ class TemplateGenerationTest(unittest.TestCase):
         # TODO should I hide password?
         os.environ["PDBserver"] = "http://pdb-test.virtualflybrain.org"
         os.environ["PDBuser"] = "neo4j"
+        os.environ["PDBpassword"] = "neo4j"
 
     def test_parameter_preparation(self):
         parameters = TestQueryIndexer().get_query_parameters()

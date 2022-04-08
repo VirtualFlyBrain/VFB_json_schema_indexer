@@ -1,23 +1,24 @@
 from src.indexers.base_query_indexer import BaseQueryIndexer
 
 
-class AnatImageQueryIndexer(BaseQueryIndexer):
+class AllDatasetsQueryIndexer(BaseQueryIndexer):
+
+    REQUEST_BATCH_SIZE = 50
 
     def get_service_name(self):
         """
         Returns the name of the current service. This name is used as part of the index to provide faster access.
         :return: name of the current service to index
         """
-        return "anat_image_query"
+        return "all_datasets_query"
 
     def get_parameters_query(self):
         """
-        Cypyher query to list short forms of all nodes that can be passed as parameter to this service. Query should
+        Cypyher query to to list short forms of all nodes that can be passed as parameter to this service. Query should
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return "MATCH (n:has_image:Individual) RETURN collect(distinct n.short_form) as ids"
-        # return "MATCH (n:has_image:Individual) WITH distinct n LIMIT 4000 RETURN collect(distinct n.short_form) as ids"
+        return None
 
     def get_vfb_json_query(self, ids):
         """
@@ -25,4 +26,4 @@ class AnatImageQueryIndexer(BaseQueryIndexer):
         :param ids: ids to query
         :return: query string
         """
-        return self.ql.anat_image_query(short_forms=ids)
+        return self.ql.all_datasets_query()

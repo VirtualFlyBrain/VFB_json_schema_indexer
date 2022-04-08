@@ -45,6 +45,8 @@ class BaseQueryIndexer(ABC):
 
         chunks = get_chunks(ids, batch_size)
         for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
+            if self.REQUEST_BATCH_SIZE == 1:
+                chunk = chunk[0]
             vfb_json_query = self.get_vfb_json_query(chunk)
             results = self.execute_query(vfb_json_query)
 
@@ -63,7 +65,14 @@ class BaseQueryIndexer(ABC):
         :return: solr document
         """
         solr_doc = dict()
-        solr_doc["id"] = result["term"]["core"]["short_form"]
+        if "term" in result:
+            solr_doc["id"] = result["term"]["core"]["short_form"]
+        elif "anatomy" in result:
+            solr_doc["id"] = result["anatomy"]["short_form"]
+        elif "dataset" in result:
+            solr_doc["id"] = result["dataset"]["short_form"]
+        else:
+            raise ValueError("Unrecognised response data: " + json.dumps(result)[:50] + " ...")
         solr_doc[self.get_service_name()] = json.dumps(result)
         return solr_doc
 
@@ -72,8 +81,14 @@ class BaseQueryIndexer(ABC):
         Executes get_parameters_query to retrieve all possible service parameters and unpacks the response.
         :return: list of short_forms
         """
-        parameters = self.execute_query(self.get_parameters_query())
-        return parameters[0]["ids"]
+        parameters = list()
+        if self.get_parameters_query():
+            response = self.execute_query(self.get_parameters_query())
+            parameters = response[0]["ids"]
+        else:
+            # add dummy param to trigger single execution
+            parameters.append("")
+        return parameters
 
     def execute_query(self, query):
         """

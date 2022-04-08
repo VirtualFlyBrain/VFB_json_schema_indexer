@@ -3,6 +3,11 @@ import json
 import logging
 import requests
 from src.indexers.anat_image_query_indexer import AnatImageQueryIndexer
+from src.indexers.anat_query_indexer import AnatQueryIndexer
+from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
+from src.indexers.ep_2_anat_query_indexer import Ep2AnatQueryIndexer
+from src.indexers.template_2_datasets_query_indexer import Template2DatasetsQueryIndexer
+from src.indexers.all_datasets_query_indexer import AllDatasetsQueryIndexer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -15,7 +20,8 @@ def main():
     Generates solr indexes for all registered indexers and merges them to generate a unified solr index. Saves unified
     index to a file defined by the 'OutputPath' environment variable.
     """
-    indexers = [AnatImageQueryIndexer()]
+    indexers = [AnatImageQueryIndexer(), AnatQueryIndexer(), Anat2EpQueryIndexer(), Ep2AnatQueryIndexer(),
+                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer()]
 
     all_data = dict()
     for indexer in indexers:
@@ -79,8 +85,9 @@ def update_solr(all_data):
 
 if __name__ == '__main__':
     # TODO delete environment variables on deployment
-    os.environ["PDBserver"] = "http://pdb.virtualflybrain.org"
+    os.environ["PDBserver"] = "http://pdb.v4.virtualflybrain.org"
     os.environ["PDBuser"] = "neo4j"
+    os.environ["PDBpassword"] = "neo4j"
 
     # os.environ["OutputPath"] = BATCH_FILE_LOCATION
     # os.environ["SOLRserver"] = "http://localhost:8993/solr"
