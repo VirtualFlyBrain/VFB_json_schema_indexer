@@ -1,0 +1,4 @@
+jsonschema
+requests
+vfb_connect
+tqdm
