@@ -3,7 +3,7 @@ from src.indexers.base_query_indexer import BaseQueryIndexer
 
 class Ep2AnatQueryIndexer(BaseQueryIndexer):
 
-    REQUEST_BATCH_SIZE = 100
+    REQUEST_BATCH_SIZE = 1
 
     def get_service_name(self):
         """

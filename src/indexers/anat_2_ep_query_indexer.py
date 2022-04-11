@@ -3,7 +3,7 @@ from src.indexers.base_query_indexer import BaseQueryIndexer
 
 class Anat2EpQueryIndexer(BaseQueryIndexer):
 
-    REQUEST_BATCH_SIZE = 50
+    REQUEST_BATCH_SIZE = 1
 
     def get_service_name(self):
         """
@@ -18,6 +18,7 @@ class Anat2EpQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
+        # return "MATCH (ep:Class:Expression_pattern)<-[ar:overlaps|part_of]-(:Individual)-[:INSTANCEOF]->(anat:Class) WITH distinct anat LIMIT 100 RETURN collect(distinct anat.short_form) as ids"
         return "MATCH (ep:Class:Expression_pattern)<-[ar:overlaps|part_of]-(:Individual)-[:INSTANCEOF]->(anat:Class) RETURN collect(distinct anat.short_form) as ids"
 
     def get_vfb_json_query(self, ids):

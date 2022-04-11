@@ -45,30 +45,29 @@ class BaseQueryIndexer(ABC):
 
         chunks = get_chunks(ids, batch_size)
         for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
-            if self.REQUEST_BATCH_SIZE == 1:
-                chunk = chunk[0]
             vfb_json_query = self.get_vfb_json_query(chunk)
             results = self.execute_query(vfb_json_query)
 
             for result in results:
-                solr_data = self.generate_solr_doc(result)
+                solr_data = self.generate_solr_doc(result, chunk)
                 all_data[solr_data["id"]] = solr_data
         end_time = datetime.datetime.now()
         diff = end_time - start_time
         log.info("All data crawled in " + str(diff.total_seconds() / 60.0) + " minutes")
         return all_data
 
-    def generate_solr_doc(self, result):
+    def generate_solr_doc(self, result, request):
         """
         Parses results and generates a solr doc to index.
         :param result: service response
+        :param request: requests to get requested entity id if provided
         :return: solr document
         """
         solr_doc = dict()
-        if "term" in result:
+        if self.REQUEST_BATCH_SIZE == 1 and request[0]:
+            solr_doc["id"] = request[0]
+        elif "term" in result:
             solr_doc["id"] = result["term"]["core"]["short_form"]
-        elif "anatomy" in result:
-            solr_doc["id"] = result["anatomy"]["short_form"]
         elif "dataset" in result:
             solr_doc["id"] = result["dataset"]["short_form"]
         else:
