@@ -41,7 +41,8 @@ class BaseQueryIndexer(ABC):
         :return: dictionary of solr data. Short_form as key, solr data as value
         """
         start_time = datetime.datetime.now()
-        batch_size = os.getenv('BatchSize', self.REQUEST_BATCH_SIZE)
+        # batch_size = os.getenv('BatchSize', self.REQUEST_BATCH_SIZE)
+        batch_size = self.REQUEST_BATCH_SIZE
         log.info("Crawling: '" + self.get_service_name() + "', Batch size:" + str(batch_size) +
                  ", Start time: " + str(start_time))
         all_data = dict()
