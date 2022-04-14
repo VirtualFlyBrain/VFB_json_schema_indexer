@@ -93,11 +93,11 @@ class BaseQueryIndexer(ABC):
             parameters.append("")
         return parameters
 
-    def execute_query(self, query: str, tries=0) -> List[Dict]:
+    def execute_query(self, query: str, try_count=0) -> List[Dict]:
         """
         Executes given cypher query in the neo4j
         :param query: query to execute
-        :param tries: try
+        :param try_count: try count
         :return: query results as a list of dicts
         """
         results = list()
@@ -105,10 +105,12 @@ class BaseQueryIndexer(ABC):
             s = self.nc.commit_list([query])
         except SocketError as e:
             log.warning(str(e))
-            # retry
-            time.sleep(60)
-            self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
-            return self.execute_query(query)
+            if try_count < 10:
+                time.sleep(30 + try_count * 15)
+                self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
+                return self.execute_query(query, try_count + 1)
+            else:
+                raise Neo4jQueryException(self.get_service_name() + " query failed :" + str(e))
 
         if s:
             results = dict_cursor(s)
@@ -139,6 +141,13 @@ class BaseQueryIndexer(ABC):
         :return: name of the current service to index
         """
         pass
+
+
+class Neo4jQueryException(Exception):
+    """
+    Custom exception class.
+    """
+    pass
 
 
 def get_chunks(lst: List, n: int) -> Generator:
