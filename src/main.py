@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+from typing import Dict
 from src.indexers.anat_image_query_indexer import AnatImageQueryIndexer
 from src.indexers.anat_query_indexer import AnatQueryIndexer
 from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
@@ -15,7 +16,7 @@ log = logging.getLogger(__name__)
 BATCH_FILE_LOCATION = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../indexes/solr_index.json")
 
 
-def main():
+def main() -> None:
     """
     Generates solr indexes for all registered indexers and merges them to generate a unified solr index. Saves unified
     index to a file defined by the 'OutputPath' environment variable.
@@ -31,7 +32,7 @@ def main():
     dump_dict_to_file(all_data, os.getenv('OutputPath', BATCH_FILE_LOCATION))
 
 
-def merge_to_main_index(all_data, service_data):
+def merge_to_main_index(all_data: Dict[str, Dict], service_data: Dict[str, Dict]) -> None:
     """
     Merges service generated index to the main index.
     :param all_data: main index dictionary
@@ -47,7 +48,7 @@ def merge_to_main_index(all_data, service_data):
             all_data[solr_id] = service_data[solr_id]
 
 
-def dump_dict_to_file(dict_data, path):
+def dump_dict_to_file(dict_data: Dict[str, Dict], path: str) -> None:
     """
     Dumps values of the dictionary to the file as list of values
     :param dict_data: dictionary of entities
@@ -58,12 +59,11 @@ def dump_dict_to_file(dict_data, path):
         json.dump(list(dict_data.values()), f, ensure_ascii=False, indent=4)
 
 
-def update_solr(all_data):
+def update_solr(all_data: Dict[str, Dict]) -> None:
     """
     Pushes solr_data to the Solr server with an update request. This function expects Solr collections specified by the
     'SOLRcollection' already exists in the Solr server.
     :param all_data: solr index dictionary
-    :return:
     """
     server = os.environ["SOLRserver"]
     collection = os.environ["SOLRcollection"]
