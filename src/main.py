@@ -59,23 +59,41 @@ def dump_dict_to_file(dict_data: Dict[str, Dict], path: str) -> None:
         json.dump(list(dict_data.values()), f, ensure_ascii=False, indent=4)
 
 
-def update_solr(all_data: Dict[str, Dict]) -> None:
+def update_solr_with_data(solr_data: Dict[str, Dict]) -> None:
     """
     Pushes solr_data to the Solr server with an update request. This function expects Solr collections specified by the
     'SOLRcollection' already exists in the Solr server.
-    :param all_data: solr index dictionary
+    :param solr_data: solr index dictionary
+    """
+    update_solr(json.dumps(solr_data.values()))
+
+
+def update_solr_from_file(solr_data_path: str) -> None:
+    """
+    Reads solr_data from the specified json file and indexes to the Solr server with an update request.
+    This function expects Solr collections specified by the 'SOLRcollection' already exists in the Solr server.
+    :param solr_data_path: path of the solr index json file
+    """
+    update_solr(open(solr_data_path, "rb").read())
+
+
+def update_solr(payload) -> None:
+    """
+    Pushes solr_data to the Solr server with an update request. This function expects Solr collections specified by the
+    'SOLRcollection' already exists in the Solr server.
+    :param payload: solr index payload
     """
     server = os.environ["SOLRserver"]
     collection = os.environ["SOLRcollection"]
     if not server.endswith("/"):
         server += "/"
     url = server + collection + "/update"
-    # url = "http://localhost:8993/solr/vfb_json/update"
+    # url = "http://localhost:8983/solr/vfb_json/update"
 
     log.info("Sending data to solr: " + url)
     headers = {"Content-type": "application/json"}
     params = {"commit": "true"}
-    r = requests.post(url, data=json.dumps(all_data.values()), params=params, headers=headers)
+    r = requests.post(url, data=payload, params=params, headers=headers)
 
     if r.status_code != 200:
         log.error("Solr indexing failed (%s): %s" % (r.status_code, r.text))
@@ -90,9 +108,10 @@ if __name__ == '__main__':
     # os.environ["PDBpassword"] = "password"
 
     # os.environ["OutputPath"] = BATCH_FILE_LOCATION
-    # os.environ["SOLRserver"] = "http://localhost:8993/solr"
+    # os.environ["SOLRserver"] = "http://localhost:8983/solr"
     # os.environ["SOLRcollection"] = "vfb_json"
 
     main()
+    # update_solr_from_file(BATCH_FILE_LOCATION)
 
 
