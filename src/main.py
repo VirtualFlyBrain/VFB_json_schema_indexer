@@ -9,6 +9,7 @@ from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
 from src.indexers.ep_2_anat_query_indexer import Ep2AnatQueryIndexer
 from src.indexers.template_2_datasets_query_indexer import Template2DatasetsQueryIndexer
 from src.indexers.all_datasets_query_indexer import AllDatasetsQueryIndexer
+from src.indexers.images_query_indexer import ImagesQueryIndexer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ def main() -> None:
     index to a file defined by the 'OutputPath' environment variable.
     """
     indexers = [AnatImageQueryIndexer(), AnatQueryIndexer(), Anat2EpQueryIndexer(), Ep2AnatQueryIndexer(),
-                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer()]
+                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer(), ImagesQueryIndexer()]
 
     all_data = dict()
     for indexer in indexers:
