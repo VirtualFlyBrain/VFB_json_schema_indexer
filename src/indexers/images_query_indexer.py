@@ -31,4 +31,4 @@ class ImagesQueryIndexer(BaseQueryIndexer):
         :param ids: ids to query
         :return: query string
         """
-        return "MATCH (n:Individual:has_image)<-[:depicts]-(:Individual)-[r:in_register_with]->(:Template)-[:depicts]->(t:Template) WHERE n.short_form IN [%s] RETURN distinct n.short_form as id, collect({template:t.short_form,thumbnail:r.thumbnail,swc:r.swc,obj:r.obj,wlz:r.wlz,nrrd:r.nrrd}) as images" (short_forms=ids)
+        return "MATCH (n:Individual:has_image)<-[:depicts]-(:Individual)-[r:in_register_with]->(:Template)-[:depicts]->(t:Template) WHERE n.short_form IN [" + ids + "] RETURN distinct n.short_form as id, collect({template:t.short_form,thumbnail:r.thumbnail,swc:r.swc,obj:r.obj,wlz:r.wlz,nrrd:r.nrrd}) as images"
