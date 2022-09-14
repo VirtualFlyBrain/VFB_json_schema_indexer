@@ -74,6 +74,8 @@ class BaseQueryIndexer(ABC):
             solr_doc["id"] = result["term"]["core"]["short_form"]
         elif "dataset" in result:
             solr_doc["id"] = result["dataset"]["short_form"]
+        elif "images" in result:
+            solr_doc["id"] = result["id"]
         else:
             raise ValueError("Unrecognised response data: " + json.dumps(result)[:50] + " ...")
         solr_doc[self.get_service_name()] = json.dumps(result)
