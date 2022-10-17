@@ -9,6 +9,14 @@ from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
 from src.indexers.ep_2_anat_query_indexer import Ep2AnatQueryIndexer
 from src.indexers.template_2_datasets_query_indexer import Template2DatasetsQueryIndexer
 from src.indexers.all_datasets_query_indexer import AllDatasetsQueryIndexer
+from src.indexers.term_info.license_term_info_indexer import LicenseTermInfoQueryIndexer
+from src.indexers.term_info.anatomical_ind_term_info_indexer import AnatomicalIndTermInfoQueryIndexer
+from src.indexers.term_info.class_term_info_indexer import ClassTermInfoQueryIndexer
+from src.indexers.term_info.neuron_class_term_info_indexer import NeuronClassTermInfoQueryIndexer
+from src.indexers.term_info.split_class_term_info_indexer import SplitClassTermInfoQueryIndexer
+from src.indexers.term_info.dataset_term_info_indexer import DatasetTermInfoQueryIndexer
+from src.indexers.term_info.pub_term_info_indexer import PubTermInfoQueryIndexer
+from src.indexers.term_info.template_term_info_indexer import TemplateTermInfoQueryIndexer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -22,7 +30,10 @@ def main() -> None:
     index to a file defined by the 'OutputPath' environment variable.
     """
     indexers = [AnatImageQueryIndexer(), AnatQueryIndexer(), Anat2EpQueryIndexer(), Ep2AnatQueryIndexer(),
-                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer()]
+                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer(), LicenseTermInfoQueryIndexer(),
+                AnatomicalIndTermInfoQueryIndexer(), ClassTermInfoQueryIndexer(), NeuronClassTermInfoQueryIndexer(),
+                SplitClassTermInfoQueryIndexer(), DatasetTermInfoQueryIndexer(), PubTermInfoQueryIndexer(),
+                TemplateTermInfoQueryIndexer()]
 
     all_data = dict()
     for indexer in indexers:
@@ -106,7 +117,7 @@ if __name__ == '__main__':
     # os.environ["PDBserver"] = "http://pdb.v4.virtualflybrain.org"
     # os.environ["PDBuser"] = "user"
     # os.environ["PDBpassword"] = "password"
-
+    #
     # os.environ["OutputPath"] = BATCH_FILE_LOCATION
     # os.environ["SOLRserver"] = "http://localhost:8983/solr"
     # os.environ["SOLRcollection"] = "vfb_json"
