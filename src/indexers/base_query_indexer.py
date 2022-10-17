@@ -43,8 +43,8 @@ class BaseQueryIndexer(ABC):
         start_time = datetime.datetime.now()
         # batch_size = os.getenv('BatchSize', self.REQUEST_BATCH_SIZE)
         batch_size = self.REQUEST_BATCH_SIZE
-        log.info("Crawling: '" + self.get_service_name() + "', Batch size:" + str(batch_size) +
-                 ", Start time: " + str(start_time))
+        log.info("Crawling: '" + self.get_service_name() + "' (" + self.__class__.__name__ + ")"
+                 + ", Batch size:" + str(batch_size) + ", Start time: " + str(start_time))
         all_data = dict()
 
         chunks = get_chunks(ids, batch_size)
