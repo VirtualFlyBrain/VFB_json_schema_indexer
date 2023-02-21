@@ -17,6 +17,8 @@ from src.indexers.term_info.split_class_term_info_indexer import SplitClassTermI
 from src.indexers.term_info.dataset_term_info_indexer import DatasetTermInfoQueryIndexer
 from src.indexers.term_info.pub_term_info_indexer import PubTermInfoQueryIndexer
 from src.indexers.term_info.template_term_info_indexer import TemplateTermInfoQueryIndexer
+from src.indexers.scRNAseq.anat_scRNAseq_query_indexer import AnatScRNASeqQueryIndexer
+from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpressionQueryIndexer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ def main() -> None:
                 Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer(), LicenseTermInfoQueryIndexer(),
                 AnatomicalIndTermInfoQueryIndexer(), ClassTermInfoQueryIndexer(), NeuronClassTermInfoQueryIndexer(),
                 SplitClassTermInfoQueryIndexer(), DatasetTermInfoQueryIndexer(), PubTermInfoQueryIndexer(),
-                TemplateTermInfoQueryIndexer()]
+                TemplateTermInfoQueryIndexer(), AnatScRNASeqQueryIndexer(), ClusterExpressionQueryIndexer()]
 
     all_data = dict()
     for indexer in indexers:
@@ -114,9 +116,9 @@ def update_solr(payload) -> None:
 
 if __name__ == '__main__':
     # TODO delete environment variables on deployment
-    # os.environ["PDBserver"] = "http://pdb.v4.virtualflybrain.org"
-    # os.environ["PDBuser"] = "user"
-    # os.environ["PDBpassword"] = "password"
+    # os.environ["PDBserver"] = "http://pdb-dev.virtualflybrain.org"
+    # os.environ["PDBuser"] = "neo4j"
+    # os.environ["PDBpassword"] = "neo4j"
     #
     # os.environ["OutputPath"] = BATCH_FILE_LOCATION
     # os.environ["SOLRserver"] = "http://localhost:8983/solr"
