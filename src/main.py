@@ -117,8 +117,8 @@ def update_solr(payload) -> None:
 if __name__ == '__main__':
     # TODO delete environment variables on deployment
     # os.environ["PDBserver"] = "http://pdb-dev.virtualflybrain.org"
-    # os.environ["PDBuser"] = "neo4j"
-    # os.environ["PDBpassword"] = "neo4j"
+    # os.environ["PDBuser"] = "user"
+    # os.environ["PDBpassword"] = "pass"
     #
     # os.environ["OutputPath"] = BATCH_FILE_LOCATION
     # os.environ["SOLRserver"] = "http://localhost:8983/solr"
