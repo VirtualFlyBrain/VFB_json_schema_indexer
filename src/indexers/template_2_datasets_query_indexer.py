@@ -27,4 +27,4 @@ class Template2DatasetsQueryIndexer(BaseQueryIndexer):
         :param ids: ids to query
         :return: query string
         """
-        return self.ql.template_2_datasets_query(ids[0])
+        return self.ql.template_2_datasets_query(ids)
