@@ -20,7 +20,7 @@ class BaseQueryIndexer(ABC):
     Crawls a VFB_json_schema service with all possible parameters and generates related solr indexes.
     """
 
-    REQUEST_BATCH_SIZE = 500
+    REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
 
     def __init__(self) -> None:
         self.ql = QueryLibrary()
