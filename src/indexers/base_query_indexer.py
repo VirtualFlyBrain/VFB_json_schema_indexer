@@ -41,20 +41,21 @@ class BaseQueryIndexer(ABC):
         :return: dictionary of solr data. Short_form as key, solr data as value
         """
         start_time = datetime.datetime.now()
-        # batch_size = os.getenv('BatchSize', self.REQUEST_BATCH_SIZE)
         batch_size = self.REQUEST_BATCH_SIZE
         log.info("Crawling: '" + self.get_service_name() + "' (" + self.__class__.__name__ + ")"
                  + ", Batch size:" + str(batch_size) + ", Start time: " + str(start_time))
         all_data = dict()
-
         chunks = get_chunks(ids, batch_size)
+        vfb_json_query_template = self.get_vfb_json_query(['$ID'])
+        vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
         for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
-            vfb_json_query = self.get_vfb_json_query(chunk)
-            results = self.execute_query(vfb_json_query)
-
-            for result in results:
-                solr_data = self.generate_solr_doc(result, chunk)
-                all_data[solr_data["id"]] = solr_data
+            results = self.execute_query(vfb_json_query, params={'ids': chunk})
+            if results:
+                for result in results:
+                    solr_data = self.generate_solr_doc(result, chunk)
+                    all_data[solr_data["id"]] = solr_data
+            else:
+                log.error("No results for chunk: " + str(chunk))
         end_time = datetime.datetime.now()
         diff = end_time - start_time
         log.info("All data crawled in " + str(diff.total_seconds() / 60.0) + " minutes")
