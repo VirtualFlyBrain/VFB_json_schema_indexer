@@ -36,33 +36,71 @@ class BaseQueryIndexer(ABC):
         ids = self.get_query_parameters()
         return self.crawl_vfb_json_data(ids)
 
-    def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
-        """
-        Crawls the VFB_json_schema service and generates solr indexes.
-        :param ids: list of short_forms to query
-        :return: dictionary of solr data. Short_form as key, solr data as value
-        """
+    def crawl_vfb_json_data(self, ids: List[str]) -> None:
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
-        log.info("Crawling: '" + self.get_service_name() + "' (" + self.__class__.__name__ + ")"
-                 + ", Batch size:" + str(batch_size) + ", Start time: " + str(start_time))
-        all_data = dict()
+        log.info(f"Crawling: '{self.get_service_name()}' ({self.__class__.__name__}), "
+                f"Batch size: {batch_size}, Start time: {start_time}")
         chunks = get_chunks(ids, batch_size)
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
-        vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
-        for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
-            log.info("Crawling chunk: " + str(chunk))
-            results = self.execute_query(vfb_json_query, params={'ids': chunk})
-            if results:
-                for result in results:
-                    solr_data = self.generate_solr_doc(result, chunk)
-                    all_data[solr_data["id"]] = solr_data
-            else:
-                log.error("No results for chunk: " + str(chunk))
+
+        neo4j_import_dir = '/import'  # Neo4j server import directory
+        jenkins_import_dir = '/PDBupgrade/import'  # Jenkins accessible directory
+
+        for i, chunk in enumerate(tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)))):
+            # Prepare the query
+            vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
+
+            # Set the output file path
+            output_filename = f"output_{i}.json"
+            output_file_path = f"file://{neo4j_import_dir}/{output_filename}"
+
+            # Execute the query and export to file
+            self.execute_query(vfb_json_query, params={'ids': chunk}, output_file=output_file_path)
+
+            # Wait for the file to be written
+            exported_file_path = os.path.join(jenkins_import_dir, output_filename)
+            while not os.path.exists(exported_file_path):
+                time.sleep(1)  # Wait for 1 second before checking again
+
+            # Process the file
+            self.process_exported_file(exported_file_path)
+
+            # Remove the file after processing
+            os.remove(exported_file_path)
+
         end_time = datetime.datetime.now()
         diff = end_time - start_time
-        log.info("All data crawled in " + str(diff.total_seconds() / 60.0) + " minutes")
-        return all_data
+        log.info(f"All data crawled in {diff.total_seconds() / 60.0} minutes")
+
+    def process_exported_file(self, file_path: str) -> None:
+        """
+        Processes the exported JSON file and generates solr documents.
+        :param file_path: Path to the exported JSON file
+        """
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)  # Load the JSON data
+            # If the data is a list of records, process each one
+            if isinstance(data, list):
+                for result in data:
+                    solr_data = self.generate_solr_doc(result, request=None)  # Adjust 'request' if needed
+                    # Here, you can write solr_data to a local file or handle it as needed
+                    self.write_solr_data(solr_data)
+            else:
+                # If data is a single record
+                solr_data = self.generate_solr_doc(data, request=None)
+                self.write_solr_data(solr_data)
+
+    def write_solr_data(self, solr_data: Dict) -> None:
+        """
+        Handles the solr data generated from the result.
+        :param solr_data: Solr document data
+        """
+        # For example, write to a local file
+        with open('solr_data.jsonl', 'a', encoding='utf-8') as f:
+            json_line = json.dumps(solr_data)
+            f.write(json_line + '\n')
+
 
     def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, str]:
         """
@@ -97,22 +135,35 @@ class BaseQueryIndexer(ABC):
             parameters.append("")
         return parameters
 
-    def execute_query(self, query: str, params: Dict = None, try_count=0) -> List[Dict]:
+    def execute_query(self, query: str, params: Dict = None, output_file: str = None, try_count=0) -> None:
         """
-        Executes given Cypher query in Neo4j using direct HTTP requests.
+        Executes given Cypher query in Neo4j and exports the result to a file on the server.
         :param query: Cypher query to execute
         :param params: Query parameters
+        :param output_file: Path to the output file on the Neo4j server (e.g., "file:///import/output.json")
         :param try_count: Retry count
-        :return: Query results as a list of dicts
         """
-        results = []
-        # Prepare the payload for the HTTP request
+        # Escape double quotes in the query
+        escaped_query = query.replace('"', '\\"')
+
+        # Construct the export query
+        export_query = f"""
+        CALL apoc.export.json.query(
+            "{escaped_query}",
+            "{output_file}",
+            {{batchSize: 1000}}
+        )
+        """
+
+        # Prepare the statement with parameters
         cstatements = [{
-            'statement': query,
+            'statement': export_query,
             'parameters': params or {}
         }]
+
         payload = {'statements': cstatements}
         headers = {'Content-Type': 'application/json'}
+
         try:
             response = requests.post(
                 url=f"{self.nc.base_uri}{self.nc.commit}",
@@ -120,22 +171,21 @@ class BaseQueryIndexer(ABC):
                 data=json.dumps(payload),
                 headers=headers
             )
-            response.raise_for_status()  # Raise an exception for HTTP errors
+            response.raise_for_status()
             response_json = response.json()
             if 'errors' in response_json and response_json['errors']:
                 log.error(f"Neo4j returned errors: {response_json['errors']}")
                 raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
             else:
-                # Process the results
-                results = [dict(zip(r['columns'], r['data'][0]['row'])) for r in response_json['results']]
+                log.info(f"Exported data to {output_file}")
         except requests.exceptions.RequestException as e:
             log.warning(str(e))
             if try_count < 10:
                 time.sleep(30 + try_count * 15)
-                return self.execute_query(query, params=params, try_count=try_count + 1)
+                return self.execute_query(query, params=params, output_file=output_file, try_count=try_count + 1)
             else:
                 raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
-        return results
+
 
     @abstractmethod
     def get_parameters_query(self) -> Optional[str]:
