@@ -103,23 +103,26 @@ class BaseQueryIndexer(ABC):
                         log.error(f"JSON decoding error in file {file_path} at line {line_number}: {e}")
         return batch_data
 
-    def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, str]:
+    def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, Dict]:
         """
-        Parses results and generates a Solr document to index.
+        Parses results and generates a Solr document to index using atomic updates.
         :param result: service response
         :param request: requests to get requested entity id if provided
-        :return: Solr document
+        :return: Solr document in atomic update format
         """
-        solr_doc = dict()
         if self.REQUEST_BATCH_SIZE == 1 and request and request[0]:
-            solr_doc["id"] = request[0]
+            doc_id = request[0]
         elif "term" in result:
-            solr_doc["id"] = result["term"]["core"]["short_form"]
+            doc_id = result["term"]["core"]["short_form"]
         elif "dataset" in result:
-            solr_doc["id"] = result["dataset"]["short_form"]
+            doc_id = result["dataset"]["short_form"]
         else:
             raise ValueError("Unrecognised response data: " + json.dumps(result)[:50] + " ...")
-        solr_doc[self.get_service_name()] = json.dumps(result)
+
+        solr_doc = {
+            "id": doc_id,
+            self.get_service_name(): {"set": json.dumps(result)}
+        }
         return solr_doc
 
     def get_query_parameters(self) -> List[str]:
@@ -228,7 +231,7 @@ class BaseQueryIndexer(ABC):
 
     def write_to_solr(self, solr_docs: Dict[str, Dict]) -> None:
         """
-        Writes a batch of Solr documents to the Solr server.
+        Writes a batch of Solr documents to the Solr server using atomic updates.
         :param solr_docs: Dictionary of Solr documents to index.
         """
         solr_server = os.getenv('SOLRserver')
@@ -238,22 +241,33 @@ class BaseQueryIndexer(ABC):
             log.error("SOLRserver or SOLRcollection environment variable is not set.")
             return
 
-        solr_update_url = f"{solr_server}/{solr_collection}/update"
+        solr_update_url = f"{solr_server.rstrip('/')}/{solr_collection}/update"
 
         headers = {'Content-Type': 'application/json'}
         solr_data_list = list(solr_docs.values())
 
+        # Include commit within the same POST request
+        params = {'commit': 'true'}
+
+        # Log the Solr update URL and data being sent for debugging
+        log.debug(f"Solr update URL: {solr_update_url}")
+        log.debug(f"Data being sent to Solr: {json.dumps(solr_data_list, indent=2)}")
+
         try:
             response = requests.post(
                 solr_update_url,
+                params=params,
                 data=json.dumps(solr_data_list),
-                headers=headers
+                headers=headers,
+                timeout=60  # Increase timeout if necessary
             )
             response.raise_for_status()
-            log.info(f"Indexed {len(solr_data_list)} documents to Solr.")
+            log.info(f"Indexed {len(solr_data_list)} documents to Solr using atomic updates and committed changes.")
+            log.debug(f"Solr response: {response.text}")
         except requests.exceptions.RequestException as e:
             log.error(f"Failed to index documents to Solr: {e}")
-            # Handle retries or logging as needed
+            if response is not None:
+                log.error(f"Solr response: {response.text}")
 
     @abstractmethod
     def get_parameters_query(self) -> Optional[str]:
