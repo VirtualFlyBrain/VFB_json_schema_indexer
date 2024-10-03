@@ -250,8 +250,8 @@ class BaseQueryIndexer(ABC):
         params = {'commit': 'true'}
 
         # Log the Solr update URL and data being sent for debugging
-        log.debug(f"Solr update URL: {solr_update_url}")
-        log.debug(f"Data being sent to Solr: {json.dumps(solr_data_list, indent=2)}")
+        log.info(f"Solr update URL: {solr_update_url}")
+        log.info(f"Data being sent to Solr: {json.dumps(solr_data_list, indent=2)}")
 
         try:
             response = requests.post(
@@ -263,7 +263,7 @@ class BaseQueryIndexer(ABC):
             )
             response.raise_for_status()
             log.info(f"Indexed {len(solr_data_list)} documents to Solr using atomic updates and committed changes.")
-            log.debug(f"Solr response: {response.text}")
+            log.info(f"Solr response: {response.text}")
         except requests.exceptions.RequestException as e:
             log.error(f"Failed to index documents to Solr: {e}")
             if response is not None:
