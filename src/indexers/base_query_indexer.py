@@ -231,14 +231,13 @@ class BaseQueryIndexer(ABC):
         Writes a batch of Solr documents to the Solr server.
         :param solr_docs: Dictionary of Solr documents to index.
         """
-        solr_server = os.getenv('SOLRserver')
-        solr_collection = os.getenv('SOLRcollection')
-
-        if not solr_server or not solr_collection:
-            log.error("SOLRserver or SOLRcollection environment variable is not set.")
+        # Implement the logic to connect to Solr and index the documents.
+        # This could involve using a Solr client library or making HTTP requests.
+        # For example, using requests to post data to Solr's update JSON handler:
+        solr_update_url = os.getenv('SOLR_UPDATE_URL')
+        if not solr_update_url:
+            log.error("SOLR_UPDATE_URL environment variable is not set.")
             return
-
-        solr_update_url = f"{solr_server}/{solr_collection}/update"
 
         headers = {'Content-Type': 'application/json'}
         solr_data_list = list(solr_docs.values())
