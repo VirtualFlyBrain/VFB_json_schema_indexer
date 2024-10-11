@@ -6,8 +6,6 @@ import datetime
 import time
 from typing import List, Dict, Generator, Optional
 from abc import ABC, abstractmethod
-
-import requests
 from vfb_connect.neo.neo4j_tools import Neo4jConnect, dict_cursor
 from src.vfb.vfb_query_builder.query_roller import QueryLibrary
 from tqdm import tqdm
@@ -96,44 +94,27 @@ class BaseQueryIndexer(ABC):
             parameters.append("")
         return parameters
 
-    def execute_query(self, query: str, params: Dict = None, try_count=0) -> List[Dict]:
+    def execute_query(self, query: str, try_count=0) -> List[Dict]:
         """
-        Executes given Cypher query in Neo4j using direct HTTP requests.
-        :param query: Cypher query to execute
-        :param params: Query parameters
-        :param try_count: Retry count
-        :return: Query results as a list of dicts
+        Executes given cypher query in the neo4j
+        :param query: query to execute
+        :param try_count: try count
+        :return: query results as a list of dicts
         """
-        results = []
-        # Prepare the payload for the HTTP request
-        cstatements = [{
-            'statement': query,
-            'parameters': params or {}
-        }]
-        payload = {'statements': cstatements}
-        headers = {'Content-Type': 'application/json'}
+        results = list()
         try:
-            response = requests.post(
-                url=f"{self.nc.base_uri}{self.nc.commit}",
-                auth=(self.nc.usr, self.nc.pwd),
-                data=json.dumps(payload),
-                headers=headers
-            )
-            response.raise_for_status()  # Raise an exception for HTTP errors
-            response_json = response.json()
-            if 'errors' in response_json and response_json['errors']:
-                log.error(f"Neo4j returned errors: {response_json['errors']}")
-                raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
-            else:
-                # Process the results
-                results = [dict(zip(r['columns'], r['data'][0]['row'])) for r in response_json['results']]
-        except requests.exceptions.RequestException as e:
+            s = self.nc.commit_list([query])
+        except SocketError as e:
             log.warning(str(e))
             if try_count < 10:
                 time.sleep(30 + try_count * 15)
-                return self.execute_query(query, params=params, try_count=try_count + 1)
+                self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
+                return self.execute_query(query, try_count + 1)
             else:
-                raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
+                raise Neo4jQueryException(self.get_service_name() + " query failed :" + str(e))
+
+        if s:
+            results = dict_cursor(s)
         return results
 
     @abstractmethod
