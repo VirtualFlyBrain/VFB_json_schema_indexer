@@ -3,8 +3,6 @@ import json
 import logging
 import requests
 from typing import Dict
-import concurrent.futures
-
 from src.indexers.anat_image_query_indexer import AnatImageQueryIndexer
 from src.indexers.anat_query_indexer import AnatQueryIndexer
 from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
@@ -33,58 +31,18 @@ def main() -> None:
     Generates solr indexes for all registered indexers and merges them to generate a unified solr index. Saves unified
     index to a file defined by the 'OutputPath' environment variable.
     """
-    # Define Term Info indexers to run first
-    term_info_indexers = [
-        LicenseTermInfoQueryIndexer(),
-        AnatomicalIndTermInfoQueryIndexer(),
-        ClassTermInfoQueryIndexer(),
-        NeuronClassTermInfoQueryIndexer(),
-        SplitClassTermInfoQueryIndexer(),
-        DatasetTermInfoQueryIndexer(),
-        PubTermInfoQueryIndexer(),
-        TemplateTermInfoQueryIndexer()
-    ]
-
-    # Define other indexers
-    other_indexers = [
-        AnatImageQueryIndexer(),
-        AnatQueryIndexer(),
-        Anat2EpQueryIndexer(),
-        Ep2AnatQueryIndexer(),
-        Template2DatasetsQueryIndexer(),
-        AllDatasetsQueryIndexer(),
-        AnatScRNASeqQueryIndexer(),
-        ClusterExpressionQueryIndexer()
-    ]
-
-    # Combine the indexers
-    indexers = term_info_indexers + other_indexers
+    indexers = [AnatImageQueryIndexer(), AnatQueryIndexer(), Anat2EpQueryIndexer(), Ep2AnatQueryIndexer(),
+                Template2DatasetsQueryIndexer(), AllDatasetsQueryIndexer(), LicenseTermInfoQueryIndexer(),
+                AnatomicalIndTermInfoQueryIndexer(), ClassTermInfoQueryIndexer(), NeuronClassTermInfoQueryIndexer(),
+                SplitClassTermInfoQueryIndexer(), DatasetTermInfoQueryIndexer(), PubTermInfoQueryIndexer(),
+                TemplateTermInfoQueryIndexer(), AnatScRNASeqQueryIndexer(), ClusterExpressionQueryIndexer()]
 
     all_data = dict()
-    # Create a ThreadPoolExecutor for Solr updates
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_to_indexer = {}
-        for indexer in indexers:
-            service_data = indexer.generate_index()
-            prepare_for_atomic_update(service_data)
-            # Submit the Solr update task to the executor
-            future = executor.submit(update_solr_with_data, service_data)
-            future_to_indexer[future] = indexer
-            # Proceed to the next indexer without waiting for Solr update
-            merge_to_main_index(all_data, service_data)
+    for indexer in indexers:
+        service_data = indexer.generate_index()
+        merge_to_main_index(all_data, service_data)
 
-        # Optionally, dump all data to a file
-        dump_dict_to_file(all_data, os.getenv('OutputPath', BATCH_FILE_LOCATION))
-
-        # Wait for all Solr updates to complete and handle exceptions
-        for future in concurrent.futures.as_completed(future_to_indexer):
-            indexer = future_to_indexer[future]
-            try:
-                future.result()
-            except Exception as exc:
-                log.error('%r generated an exception: %s' % (indexer, exc))
-            else:
-                log.info('%r Solr update completed successfully.' % (indexer,))
+    dump_dict_to_file(all_data, os.getenv('OutputPath', BATCH_FILE_LOCATION))
 
 
 def merge_to_main_index(all_data: Dict[str, Dict], service_data: Dict[str, Dict]) -> None:
@@ -113,22 +71,28 @@ def dump_dict_to_file(dict_data: Dict[str, Dict], path: str) -> None:
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(list(dict_data.values()), f, ensure_ascii=False, indent=4)
 
-def prepare_for_atomic_update(service_data: Dict[str, Dict]) -> None:
-    for doc_id, doc_fields in service_data.items():
-        for field_name, field_value in doc_fields.items():
-            if field_name != 'id':
-                doc_fields[field_name] = {'set': field_value}
 
 def update_solr_with_data(solr_data: Dict[str, Dict]) -> None:
-    solr_docs = list(solr_data.values())
-    update_solr(json.dumps(solr_docs))
+    """
+    Pushes solr_data to the Solr server with an update request. This function expects Solr collections specified by the
+    'SOLRcollection' already exists in the Solr server.
+    :param solr_data: solr index dictionary
+    """
+    update_solr(json.dumps(solr_data.values()))
+
+
+def update_solr_from_file(solr_data_path: str) -> None:
+    """
+    Reads solr_data from the specified json file and indexes to the Solr server with an update request.
+    This function expects Solr collections specified by the 'SOLRcollection' already exists in the Solr server.
+    :param solr_data_path: path of the solr index json file
+    """
+    update_solr(open(solr_data_path, "rb").read())
 
 
 def update_solr(payload) -> None:
     """
-    Pushes payload to the Solr server with an update request.
-    This function expects Solr collections specified by the
-    Pushes payload to the Solr server with an update request.
+    Pushes solr_data to the Solr server with an update request. This function expects Solr collections specified by the
     'SOLRcollection' already exists in the Solr server.
     :param payload: solr index payload
     """
@@ -137,24 +101,15 @@ def update_solr(payload) -> None:
     if not server.endswith("/"):
         server += "/"
     url = server + collection + "/update"
+    # url = "http://localhost:8983/solr/vfb_json/update"
 
-    log.info("Sending data to Solr: " + url)
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    params = {
-        "commit": "true",
-        "wt": "json"
-    }
+    log.info("Sending data to solr: " + url)
+    headers = {"Content-type": "application/json"}
+    params = {"commit": "true"}
     r = requests.post(url, data=payload, params=params, headers=headers)
 
     if r.status_code != 200:
-        try:
-            error_details = r.json()
-            log.error("Solr indexing failed (%s): %s", r.status_code, json.dumps(error_details, indent=2))
-        except ValueError:
-            log.error("Solr indexing failed (%s): %s", r.status_code, r.text)
+        log.error("Solr indexing failed (%s): %s" % (r.status_code, r.text))
     else:
         log.info("Solr indexing is SUCCESSFUL")
 
