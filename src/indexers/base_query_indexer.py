@@ -30,15 +30,13 @@ class BaseQueryIndexer(ABC):
 
     def generate_index(self) -> Dict[str, Dict]:
         """
-        Crawls VFB_json_schema API with all possible parameters and generates the Solr index data.
-        :return: Dictionary of Solr data. Short_form as key, Solr data as value
+        Crawls VFB_json_schema api with all possible parameters and generates the solr index data.
+        :return: dictionary of solr data. Short_form as key, solr data as value
         """
         ids = self.get_query_parameters()
-        index_data = self.crawl_vfb_json_data(ids)
-        return index_data
+        return self.crawl_vfb_json_data(ids)
 
-
-    def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
+    def crawl_vfb_json_data(self, ids: List[str]) -> None:
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
         log.info(f"Crawling: '{self.get_service_name()}' ({self.__class__.__name__}), "
@@ -48,8 +46,6 @@ class BaseQueryIndexer(ABC):
 
         neo4j_import_dir = '/import'  # Neo4j server import directory
         jenkins_import_dir = '/PDBupgrade/import'  # Jenkins accessible directory
-
-        all_data = {}  # Initialize the dictionary to collect Solr documents
 
         for i, chunk in enumerate(tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)))):
             # Prepare the query
@@ -67,11 +63,8 @@ class BaseQueryIndexer(ABC):
             while not os.path.exists(exported_file_path):
                 time.sleep(1)  # Wait for 1 second before checking again
 
-            # Process the file and collect the data
-            batch_data = self.process_exported_file(exported_file_path)
-
-            # Update the all_data dictionary with the batch data
-            all_data.update(batch_data)
+            # Process the file
+            self.process_exported_file(exported_file_path)
 
             # Remove the file after processing
             os.remove(exported_file_path)
@@ -80,28 +73,34 @@ class BaseQueryIndexer(ABC):
         diff = end_time - start_time
         log.info(f"All data crawled in {diff.total_seconds() / 60.0} minutes")
 
-        return all_data  # Return the combined dictionary
-
-
-    def process_exported_file(self, file_path: str) -> Dict[str, Dict]:
+    def process_exported_file(self, file_path: str) -> None:
         """
-        Processes the exported JSON file and generates Solr documents.
+        Processes the exported JSON file and generates solr documents.
         :param file_path: Path to the exported JSON file
-        :return: Dictionary of Solr documents
         """
-        batch_data = {}
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)  # Load the JSON data
             # If the data is a list of records, process each one
             if isinstance(data, list):
                 for result in data:
                     solr_data = self.generate_solr_doc(result, request=None)  # Adjust 'request' if needed
-                    batch_data[solr_data["id"]] = solr_data
+                    # Here, you can write solr_data to a local file or handle it as needed
+                    self.write_solr_data(solr_data)
             else:
                 # If data is a single record
                 solr_data = self.generate_solr_doc(data, request=None)
-                batch_data[solr_data["id"]] = solr_data
-        return batch_data
+                self.write_solr_data(solr_data)
+
+    def write_solr_data(self, solr_data: Dict) -> None:
+        """
+        Handles the solr data generated from the result.
+        :param solr_data: Solr document data
+        """
+        # For example, write to a local file
+        with open('solr_data.jsonl', 'a', encoding='utf-8') as f:
+            json_line = json.dumps(solr_data)
+            f.write(json_line + '\n')
+
 
     def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, str]:
         """
@@ -111,7 +110,7 @@ class BaseQueryIndexer(ABC):
         :return: solr document
         """
         solr_doc = dict()
-        if self.REQUEST_BATCH_SIZE == 1 and request and request[0]:
+        if self.REQUEST_BATCH_SIZE == 1 and request[0]:
             solr_doc["id"] = request[0]
         elif "term" in result:
             solr_doc["id"] = result["term"]["core"]["short_form"]
@@ -123,16 +122,18 @@ class BaseQueryIndexer(ABC):
         return solr_doc
 
     def get_query_parameters(self) -> List[str]:
-        parameters = []
-        query = self.get_parameters_query()
-        if query:
-            response = self.run_query(query)
-            if response and "ids" in response[0]:
-                parameters = response[0]["ids"]
+        """
+        Executes get_parameters_query to retrieve all possible service parameters and unpacks the response.
+        :return: list of short_forms
+        """
+        parameters = list()
+        if self.get_parameters_query():
+            response = self.execute_query(self.get_parameters_query())
+            parameters = response[0]["ids"]
         else:
+            # add dummy param to trigger single execution
             parameters.append("")
         return parameters
-
 
     def execute_query(self, query: str, params: Dict = None, output_file: str = None, try_count=0) -> None:
         """
@@ -150,17 +151,15 @@ class BaseQueryIndexer(ABC):
         CALL apoc.export.json.query(
             "{escaped_query}",
             "{output_file}",
-            {{batchSize: 1000, params: $params}}
+            {{batchSize: 1000}}
         )
         """
-
 
         # Prepare the statement with parameters
         cstatements = [{
             'statement': export_query,
-            'parameters': {'params': params} if params else {}
+            'parameters': params or {}
         }]
-
 
         payload = {'statements': cstatements}
         headers = {'Content-Type': 'application/json'}
@@ -186,48 +185,6 @@ class BaseQueryIndexer(ABC):
                 return self.execute_query(query, params=params, output_file=output_file, try_count=try_count + 1)
             else:
                 raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
-
-    def run_query(self, query: str, params: Dict = None, try_count=0) -> List[Dict]:
-        """
-        Executes given Cypher query in Neo4j and returns the results.
-        """
-        results = []
-        cstatements = [{
-            'statement': query,
-            'parameters': params or {}
-        }]
-
-        payload = {'statements': cstatements}
-        headers = {'Content-Type': 'application/json'}
-
-        try:
-            response = requests.post(
-                url=f"{self.nc.base_uri}{self.nc.commit}",
-                auth=(self.nc.usr, self.nc.pwd),
-                data=json.dumps(payload),
-                headers=headers
-            )
-            response.raise_for_status()
-            response_json = response.json()
-            if 'errors' in response_json and response_json['errors']:
-                log.error(f"Neo4j returned errors: {response_json['errors']}")
-                raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
-            else:
-                # Process results into a list of dicts
-                for result in response_json['results']:
-                    columns = result['columns']
-                    for data_row in result['data']:
-                        row = data_row['row']
-                        result_dict = dict(zip(columns, row))
-                        results.append(result_dict)
-        except requests.exceptions.RequestException as e:
-            log.warning(str(e))
-            if try_count < 10:
-                time.sleep(30 + try_count * 15)
-                return self.run_query(query, params=params, try_count=try_count + 1)
-            else:
-                raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
-        return results
 
 
     @abstractmethod
