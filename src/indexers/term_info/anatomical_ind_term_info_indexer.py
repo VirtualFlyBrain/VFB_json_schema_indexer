@@ -17,7 +17,7 @@ class AnatomicalIndTermInfoQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return "MATCH (i:Individual) WHERE NOT i:License AND NOT i:DataSet AND NOT i:pub AND NOT i:Template AND NOT i.short_form starts with 'VFBc_' AND NOT i.short_form starts with 'FBlc' AND NOT i.short_form starts with 'SAMN' RETURN collect(distinct i.short_form) as ids"
+        return "MATCH (i:Individual) WHERE NOT i:License AND NOT i:DataSet AND NOT i:pub AND NOT i:Template AND NOT i.short_form starts with 'VFBc_' AND NOT i.short_form starts with 'FBlc' RETURN collect(distinct i.short_form) as ids"
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         """
