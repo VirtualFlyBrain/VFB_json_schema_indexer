@@ -91,15 +91,16 @@ class BaseQueryIndexer(ABC):
         """
         batch_data = {}
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line_number, line in enumerate(f, start=1):
-                line = line.strip()
-                if line:
-                    try:
-                        result = json.loads(line)
-                        solr_data = self.generate_solr_doc(result, request=None)
-                        batch_data[solr_data["id"]] = solr_data
-                    except json.JSONDecodeError as e:
-                        log.error(f"JSON decoding error in file {file_path} at line {line_number}: {e}")
+            data = json.load(f)  # Load the JSON data
+            # If the data is a list of records, process each one
+            if isinstance(data, list):
+                for result in data:
+                    solr_data = self.generate_solr_doc(result, request=None)  # Adjust 'request' if needed
+                    batch_data[solr_data["id"]] = solr_data
+            else:
+                # If data is a single record
+                solr_data = self.generate_solr_doc(data, request=None)
+                batch_data[solr_data["id"]] = solr_data
         return batch_data
 
     def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, str]:
