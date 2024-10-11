@@ -149,7 +149,7 @@ class BaseQueryIndexer(ABC):
         CALL apoc.export.json.query(
             "{escaped_query}",
             "{output_file}",
-            {{batchSize: 10, params: $params}}
+            {{batchSize: 1000, params: $params}}
         )
         """
 
