@@ -51,7 +51,6 @@ class BaseQueryIndexer(ABC):
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
         vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
         for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
-            log.info("Crawling chunk: " + str(chunk))
             results = self.execute_query(vfb_json_query, params={'ids': chunk})
             if results:
                 for result in results:
