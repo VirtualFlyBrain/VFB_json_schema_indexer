@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 class BaseQueryIndexer(ABC):
     """
     Base query class that provides an abstraction for the concrete service crawlers.
-    Crawls a VFB_json_schema service with all possible parameters and generates related Solr indexes.
+    Crawls a VFB_json_schema service with all possible parameters and generates related solr indexes.
     """
 
     REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
@@ -37,11 +37,12 @@ class BaseQueryIndexer(ABC):
         index_data = self.crawl_vfb_json_data(ids)
         return index_data
 
+
     def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
         log.info(f"Crawling: '{self.get_service_name()}' ({self.__class__.__name__}), "
-                 f"Batch size: {batch_size}, Start time: {start_time}")
+                f"Batch size: {batch_size}, Start time: {start_time}")
         chunks = get_chunks(ids, batch_size)
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
 
@@ -69,9 +70,6 @@ class BaseQueryIndexer(ABC):
             # Process the file and collect the data
             batch_data = self.process_exported_file(exported_file_path)
 
-            # Write batch_data to Solr
-            self.write_to_solr(batch_data)
-
             # Update the all_data dictionary with the batch data
             all_data.update(batch_data)
 
@@ -80,9 +78,10 @@ class BaseQueryIndexer(ABC):
 
         end_time = datetime.datetime.now()
         diff = end_time - start_time
-        log.info(f"All data crawled and indexed in {diff.total_seconds() / 60.0} minutes")
+        log.info(f"All data crawled in {diff.total_seconds() / 60.0} minutes")
 
         return all_data  # Return the combined dictionary
+
 
     def process_exported_file(self, file_path: str) -> Dict[str, Dict]:
         """
@@ -105,10 +104,10 @@ class BaseQueryIndexer(ABC):
 
     def generate_solr_doc(self, result: Dict, request: List[str]) -> Dict[str, str]:
         """
-        Parses results and generates a Solr document to index.
+        Parses results and generates a solr doc to index.
         :param result: service response
         :param request: requests to get requested entity id if provided
-        :return: Solr document
+        :return: solr document
         """
         solr_doc = dict()
         if self.REQUEST_BATCH_SIZE == 1 and request and request[0]:
@@ -133,6 +132,7 @@ class BaseQueryIndexer(ABC):
             parameters.append("")
         return parameters
 
+
     def execute_query(self, query: str, params: Dict = None, output_file: str = None, try_count=0) -> None:
         """
         Executes given Cypher query in Neo4j and exports the result to a file on the server.
@@ -153,11 +153,13 @@ class BaseQueryIndexer(ABC):
         )
         """
 
+
         # Prepare the statement with parameters
         cstatements = [{
             'statement': export_query,
             'parameters': {'params': params} if params else {}
         }]
+
 
         payload = {'statements': cstatements}
         headers = {'Content-Type': 'application/json'}
@@ -226,38 +228,11 @@ class BaseQueryIndexer(ABC):
                 raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
         return results
 
-    def write_to_solr(self, solr_docs: Dict[str, Dict]) -> None:
-        """
-        Writes a batch of Solr documents to the Solr server.
-        :param solr_docs: Dictionary of Solr documents to index.
-        """
-        # Implement the logic to connect to Solr and index the documents.
-        # This could involve using a Solr client library or making HTTP requests.
-        # For example, using requests to post data to Solr's update JSON handler:
-        solr_update_url = os.getenv('SOLR_UPDATE_URL')
-        if not solr_update_url:
-            log.error("SOLR_UPDATE_URL environment variable is not set.")
-            return
-
-        headers = {'Content-Type': 'application/json'}
-        solr_data_list = list(solr_docs.values())
-
-        try:
-            response = requests.post(
-                solr_update_url,
-                data=json.dumps(solr_data_list),
-                headers=headers
-            )
-            response.raise_for_status()
-            log.info(f"Indexed {len(solr_data_list)} documents to Solr.")
-        except requests.exceptions.RequestException as e:
-            log.error(f"Failed to index documents to Solr: {e}")
-            # Handle retries or logging as needed
 
     @abstractmethod
     def get_parameters_query(self) -> Optional[str]:
         """
-        Cypher query to list short forms of all nodes that can be passed as parameters to this service. Query should
+        Cypyher query to to list short forms of all nodes that can be passed as parameter to this service. Query should
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
