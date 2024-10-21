@@ -48,7 +48,7 @@ class BaseQueryIndexer(ABC):
         all_data = dict()
 
         chunks = get_chunks(ids, batch_size)
-        for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)), desc=self.get_service_name()):
+        for chunk in tqdm(chunks, total=int(math.ceil(len(ids) / batch_size))):
             vfb_json_query = self.get_vfb_json_query(chunk)
             results = self.execute_query(vfb_json_query)
 
