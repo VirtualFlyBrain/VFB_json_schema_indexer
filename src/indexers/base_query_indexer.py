@@ -50,7 +50,7 @@ class BaseQueryIndexer(ABC):
 
         all_data = {}  # Initialize the dictionary to collect Solr documents
 
-        for i, chunk in enumerate(tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)))):
+        for i, chunk in enumerate(tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)), desc=self.get_service_name())):
             # Prepare the query
             vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
 
