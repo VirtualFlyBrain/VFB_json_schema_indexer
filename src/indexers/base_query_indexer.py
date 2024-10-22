@@ -178,7 +178,7 @@ class BaseQueryIndexer(ABC):
                 log.error(f"Neo4j returned errors: {response_json['errors']}")
                 raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
             else:
-                log.info(f"Exported data For {params.ids[0]} to {params.ids[-1]}")
+                log.info(f"Exported data For {params['ids'][0]} to {params['ids'][-1]}")
         except requests.exceptions.RequestException as e:
             log.warning(str(e))
             if try_count < 10:
