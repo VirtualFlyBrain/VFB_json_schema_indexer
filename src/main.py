@@ -115,9 +115,18 @@ def dump_dict_to_file(dict_data: Dict[str, Dict], path: str) -> None:
 
 def prepare_for_atomic_update(service_data: Dict[str, Dict]) -> None:
     for doc_id, doc_fields in service_data.items():
-        for field_name, field_value in doc_fields.items():
-            if field_name != 'id':
-                doc_fields[field_name] = {'set': field_value}
+        for field_name, field_value in list(doc_fields.items()):
+            # Skip the id field
+            if field_name == 'id':
+                continue
+                
+            # Check if the value is already formatted for atomic update
+            if isinstance(field_value, dict) and len(field_value) == 1 and next(iter(field_value.keys())) in ('set', 'add', 'inc', 'remove'):
+                # Already in atomic update format, leave it as is
+                continue
+                
+            # Apply atomic update formatting
+            doc_fields[field_name] = {'set': field_value}
 
 def update_solr_with_data(solr_data: Dict[str, Dict]) -> None:
     solr_docs = list(solr_data.values())
