@@ -116,6 +116,8 @@ class BaseQueryIndexer(ABC):
             doc_id = result["term"]["core"]["short_form"]
         elif "dataset" in result:
             doc_id = result["dataset"]["short_form"]
+        elif "anatomy" in result:
+            doc_id = result["anatomy"]["short_form"]
         else:
             raise ValueError("Unrecognised response data: " + json.dumps(result)[:50] + " ...")
 
