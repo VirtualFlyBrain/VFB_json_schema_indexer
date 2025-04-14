@@ -19,6 +19,7 @@ from src.indexers.term_info.split_class_term_info_indexer import SplitClassTermI
 from src.indexers.term_info.dataset_term_info_indexer import DatasetTermInfoQueryIndexer
 from src.indexers.term_info.pub_term_info_indexer import PubTermInfoQueryIndexer
 from src.indexers.term_info.template_term_info_indexer import TemplateTermInfoQueryIndexer
+from src.indexers.term_info.cluster_term_info_indexer import ClusterTermInfoQueryIndexer
 from src.indexers.scRNAseq.anat_scRNAseq_query_indexer import AnatScRNASeqQueryIndexer
 from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpressionQueryIndexer
 
@@ -42,7 +43,8 @@ def main() -> None:
         SplitClassTermInfoQueryIndexer(),
         DatasetTermInfoQueryIndexer(),
         PubTermInfoQueryIndexer(),
-        TemplateTermInfoQueryIndexer()
+        TemplateTermInfoQueryIndexer(),
+        ClusterTermInfoQueryIndexer()  # Add the new Cluster term info indexer
     ]
 
     # Define other indexers
