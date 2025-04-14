@@ -34,17 +34,17 @@ def main() -> None:
     Generates solr indexes for all registered indexers and merges them to generate a unified solr index. Saves unified
     index to a file defined by the 'OutputPath' environment variable.
     """
-    # Define Term Info indexers to run first
+    # Order term_info_indexers to match the vfb.xmi compound query order
     term_info_indexers = [
-        LicenseTermInfoQueryIndexer(),
-        AnatomicalIndTermInfoQueryIndexer(),
-        ClassTermInfoQueryIndexer(),
-        NeuronClassTermInfoQueryIndexer(),
-        SplitClassTermInfoQueryIndexer(),
-        DatasetTermInfoQueryIndexer(),
-        PubTermInfoQueryIndexer(),
-        TemplateTermInfoQueryIndexer(),
-        ClusterTermInfoQueryIndexer()  # Add the new Cluster term info indexer
+        ClassTermInfoQueryIndexer(),          # Class (base)
+        NeuronClassTermInfoQueryIndexer(),    # Neuron Class
+        SplitClassTermInfoQueryIndexer(),     # Split Class
+        AnatomicalIndTermInfoQueryIndexer(),  # Individual
+        ClusterTermInfoQueryIndexer(),        # Cluster
+        TemplateTermInfoQueryIndexer(),       # Template
+        PubTermInfoQueryIndexer(),            # Publication
+        DatasetTermInfoQueryIndexer(),        # DataSet
+        LicenseTermInfoQueryIndexer()         # License
     ]
 
     # Define other indexers
