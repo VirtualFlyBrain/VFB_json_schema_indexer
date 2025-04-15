@@ -62,5 +62,5 @@ class ClusterTermInfoQueryIndexer(BaseQueryIndexer):
         """
         solr_doc = {}
         solr_doc["id"] = result["term"]["core"]["short_form"]
-        solr_doc[self.get_service_name()] = result
+        solr_doc[self.get_service_name()] = {"set": result}
         return solr_doc
