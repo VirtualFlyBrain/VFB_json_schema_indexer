@@ -36,10 +36,10 @@ def main() -> None:
     """
     # Order term_info_indexers to match the vfb.xmi compound query order
     term_info_indexers = [
-        ClassTermInfoQueryIndexer(),          # Class (base)
-        NeuronClassTermInfoQueryIndexer(),    # Neuron Class
-        SplitClassTermInfoQueryIndexer(),     # Split Class
-        AnatomicalIndTermInfoQueryIndexer(),  # Individual
+        #ClassTermInfoQueryIndexer(),          # Class (base)
+        #NeuronClassTermInfoQueryIndexer(),    # Neuron Class
+        #SplitClassTermInfoQueryIndexer(),     # Split Class
+        #AnatomicalIndTermInfoQueryIndexer(),  # Individual
         ClusterTermInfoQueryIndexer(),        # Cluster
         TemplateTermInfoQueryIndexer(),       # Template
         PubTermInfoQueryIndexer(),            # Publication
