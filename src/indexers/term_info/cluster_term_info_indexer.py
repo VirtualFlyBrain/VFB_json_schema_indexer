@@ -51,16 +51,3 @@ class ClusterTermInfoQueryIndexer(BaseQueryIndexer):
         WITH CASE WHEN o IS NULL THEN [] ELSE COLLECT ({ relation: { label: r.label, iri: r.uri, type: type(r) } , object: { short_form: o.short_form, label: coalesce(o.label,''), iri: o.iri, unique_facets: apoc.coll.sort(coalesce(o.uniqueFacets, [])), symbol: coalesce(o.symbol[0], ''), types: labels(o) }  }) END AS related_individuals ,primary,dataset_license,parents,relationships,xrefs,channel_image 
         RETURN { core : { short_form: primary.short_form, label: coalesce(primary.label,''), iri: primary.iri, types: labels(primary) , unique_facets: apoc.coll.sort(coalesce(primary.uniqueFacets, [])), symbol: coalesce(primary.symbol[0], '')}, description: coalesce(primary.description, []), comment : coalesce(primary.comment, primary.`annotation-comment`, []) } AS term, 'Get JSON for Cluster using modified Individual:Anatomy' AS query, 'ca9ab19' AS version , dataset_license, parents, relationships, xrefs, channel_image, related_individuals
         """
-
-    def generate_solr_doc(self, result: dict, request=None) -> dict:
-        """
-        Generates a solr document from a cluster term info result.
-        
-        :param result: VFB JSON API response
-        :param request: Request object
-        :return: Dictionary containing solr document
-        """
-        solr_doc = {}
-        solr_doc["id"] = result["term"]["core"]["short_form"]
-        solr_doc[self.get_service_name()] = {"set": result}
-        return solr_doc
