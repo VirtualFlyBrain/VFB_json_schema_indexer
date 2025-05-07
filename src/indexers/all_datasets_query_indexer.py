@@ -19,7 +19,7 @@ class AllDatasetsQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return None
+        return "MATCH (t:Template) WHERE (t)<-[:depicts]-(:Template) RETURN collect(distinct t.short_form) as ids"
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         """
