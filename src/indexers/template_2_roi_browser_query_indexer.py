@@ -19,7 +19,7 @@ class Template2ROIbrowserQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return "MATCH (t:Template)<-[:depicts]-(tc:Template) RETURN collect(distinct t.short_form) as ids"
+        return "MATCH (t:Template)<-[:depicts]-(:Template) RETURN collect(distinct t.short_form) as ids"
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         """
