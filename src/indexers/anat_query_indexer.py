@@ -17,7 +17,7 @@ class AnatQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return "MATCH (n:Class:Anatomy) WHERE n.short_form STARTS WITH 'FBbt' AND NOT n:Deprecated RETURN collect(distinct n.short_form) as ids"
+        return "MATCH (n:Class:Anatomy) WHERE NOT n:Deprecated RETURN collect(distinct n.short_form) as ids"
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         """
