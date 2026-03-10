@@ -22,6 +22,8 @@ from src.indexers.term_info.template_term_info_indexer import TemplateTermInfoQu
 from src.indexers.term_info.cluster_term_info_indexer import ClusterTermInfoQueryIndexer
 from src.indexers.scRNAseq.anat_scRNAseq_query_indexer import AnatScRNASeqQueryIndexer
 from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpressionQueryIndexer
+from src.indexers.connectivity.neuron_downstream_connectivity_indexer import NeuronDownstreamConnectivityIndexer
+from src.indexers.connectivity.neuron_upstream_connectivity_indexer import NeuronUpstreamConnectivityIndexer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -56,7 +58,9 @@ def main() -> None:
         Template2DatasetsQueryIndexer(),
         AllDatasetsQueryIndexer(),
         AnatScRNASeqQueryIndexer(),
-        ClusterExpressionQueryIndexer()
+        ClusterExpressionQueryIndexer(),
+        NeuronDownstreamConnectivityIndexer(),
+        NeuronUpstreamConnectivityIndexer()
     ]
 
     # Combine the indexers
