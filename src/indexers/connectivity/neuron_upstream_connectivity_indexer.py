@@ -18,7 +18,7 @@ class NeuronUpstreamConnectivityIndexer(BaseQueryIndexer):
     REQUEST_BATCH_SIZE = 1
 
     def get_service_name(self) -> str:
-        return "upstream_connectivity"
+        return "upstream_connectivity_query"
 
     def get_parameters_query(self) -> str:
         return "MATCH (n:Class:Neuron) RETURN collect(distinct n.short_form) as ids"
@@ -61,8 +61,45 @@ class NeuronUpstreamConnectivityIndexer(BaseQueryIndexer):
         )
 
     def generate_solr_doc(self, result: Dict, request) -> Dict:
-        doc_id = result["upstream"]["class_id"]
+        data = result["upstream"]
+        primary_id = data["class_id"]
+        primary_label = data["class_label"]
+        rows = []
+        for conn in data.get("upstream_connections", []):
+            rows.append({
+                "query": "upstream_class_connectivity_query",
+                "term": {
+                    "core": {
+                        "short_form": primary_id,
+                        "label": primary_label,
+                        "iri": "",
+                        "types": ["Class", "Neuron"],
+                        "unique_facets": ["Class", "Neuron"]
+                    },
+                    "description": [],
+                    "comment": []
+                },
+                "object": {
+                    "short_form": conn["upstream_class_id"],
+                    "label": conn["upstream_class"],
+                    "iri": "",
+                    "types": ["Class", "Neuron"],
+                    "unique_facets": ["Class", "Neuron"]
+                },
+                "class_connectivity": {
+                    "upstream_class": conn["upstream_class"],
+                    "upstream_class_id": conn["upstream_class_id"],
+                    "downstream_class": conn["downstream_class"],
+                    "downstream_class_id": conn["downstream_class_id"],
+                    "total_upstream_count": conn["total_upstream_count"],
+                    "connected_upstream_count": conn["connected_upstream_count"],
+                    "percent_connected": conn["percent_connected"],
+                    "pairwise_connections": conn["pairwise_connections"],
+                    "total_weight": conn["total_weight"],
+                    "average_weight": conn["average_weight"]
+                }
+            })
         return {
-            "id": doc_id,
-            self.get_service_name(): {"set": json.dumps(result)}
+            "id": primary_id,
+            self.get_service_name(): {"set": json.dumps(rows)}
         }
