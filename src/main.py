@@ -36,12 +36,12 @@ def main() -> None:
     Generates solr indexes for all registered indexers and merges them to generate a unified solr index. Saves unified
     index to a file defined by the 'OutputPath' environment variable.
     """
-    # Order term_info_indexers to match the vfb.xmi compound query order
+    # Order term_info_indexers to prioritize anatomical individuals before class term_info.
     term_info_indexers = [
+        AnatomicalIndTermInfoQueryIndexer(),  # Individual
         ClassTermInfoQueryIndexer(),          # Class (base)
         NeuronClassTermInfoQueryIndexer(),    # Neuron Class
         SplitClassTermInfoQueryIndexer(),     # Split Class
-        AnatomicalIndTermInfoQueryIndexer(),  # Individual
         ClusterTermInfoQueryIndexer(),        # Cluster
         TemplateTermInfoQueryIndexer(),       # Template
         PubTermInfoQueryIndexer(),            # Publication
@@ -186,5 +186,4 @@ if __name__ == '__main__':
 
     main()
     # update_solr_from_file(BATCH_FILE_LOCATION)
-
 
