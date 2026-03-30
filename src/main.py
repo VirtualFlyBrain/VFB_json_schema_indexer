@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import requests
 from typing import Dict
 import concurrent.futures
 
@@ -24,6 +23,7 @@ from src.indexers.scRNAseq.anat_scRNAseq_query_indexer import AnatScRNASeqQueryI
 from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpressionQueryIndexer
 from src.indexers.connectivity.neuron_downstream_connectivity_indexer import NeuronDownstreamConnectivityIndexer
 from src.indexers.connectivity.neuron_upstream_connectivity_indexer import NeuronUpstreamConnectivityIndexer
+from src.solr_client import send_solr_docs, send_solr_payload
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -135,11 +135,10 @@ def prepare_for_atomic_update(service_data: Dict[str, Dict]) -> None:
             doc_fields[field_name] = {'set': field_value}
 
 def update_solr_with_data(solr_data: Dict[str, Dict]) -> None:
-    solr_docs = list(solr_data.values())
-    update_solr(json.dumps(solr_docs))
+    send_solr_docs(solr_data.values(), service_name="combined_index")
 
 
-def update_solr(payload) -> None:
+def update_solr(payload, service_name: str = "combined_index") -> None:
     """
     Pushes payload to the Solr server with an update request.
     This function expects Solr collections specified by the
@@ -147,31 +146,7 @@ def update_solr(payload) -> None:
     'SOLRcollection' already exists in the Solr server.
     :param payload: solr index payload
     """
-    server = os.environ["SOLRserver"]
-    collection = os.environ["SOLRcollection"]
-    if not server.endswith("/"):
-        server += "/"
-    url = server + collection + "/update"
-
-    log.info("Sending data to Solr: " + url)
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    params = {
-        "commit": "true",
-        "wt": "json"
-    }
-    r = requests.post(url, data=payload, params=params, headers=headers)
-
-    if r.status_code != 200:
-        try:
-            error_details = r.json()
-            log.error("Solr indexing failed (%s): %s", r.status_code, json.dumps(error_details, indent=2))
-        except ValueError:
-            log.error("Solr indexing failed (%s): %s", r.status_code, r.text)
-    else:
-        log.info("Solr indexing is SUCCESSFUL")
+    send_solr_payload(payload, service_name=service_name)
 
 
 if __name__ == '__main__':
@@ -186,4 +161,3 @@ if __name__ == '__main__':
 
     main()
     # update_solr_from_file(BATCH_FILE_LOCATION)
-
