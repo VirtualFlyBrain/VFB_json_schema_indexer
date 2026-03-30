@@ -23,6 +23,9 @@ class BaseQueryIndexer(ABC):
     """
 
     REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    SOLR_WRITE_MAX_RETRIES = int(os.getenv('SOLR_WRITE_MAX_RETRIES', 10))
+    SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv('SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS', 30))
+    SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS = int(os.getenv('SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS', 15))
 
     def __init__(self) -> None:
         self.ql = QueryLibrary()
@@ -231,7 +234,7 @@ class BaseQueryIndexer(ABC):
                 raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
         return results
 
-    def write_to_solr(self, solr_docs: Dict[str, Dict]) -> None:
+    def write_to_solr(self, solr_docs: Dict[str, Dict], try_count: int = 0) -> None:
         """
         Writes a batch of Solr documents to the Solr server using atomic updates.
         :param solr_docs: Dictionary of Solr documents to index.
@@ -247,6 +250,10 @@ class BaseQueryIndexer(ABC):
 
         headers = {'Content-Type': 'application/json'}
         solr_data_list = list(solr_docs.values())
+
+        if not solr_data_list:
+            log.info(f"No documents to index to Solr for service '{self.get_service_name()}'.")
+            return
 
         # Include commit within the same POST request
         params = {'commit': 'true'}
@@ -267,9 +274,28 @@ class BaseQueryIndexer(ABC):
             log.info(f"Indexed {len(solr_data_list)} documents to Solr using atomic updates and committed changes.")
             log.debug(f"Solr response: {response.text}")
         except requests.exceptions.RequestException as e:
-            log.error(f"Failed to index documents to Solr: {e}")
+            response = getattr(e, "response", None)
+            log.warning(
+                f"Failed to index {len(solr_data_list)} documents to Solr "
+                f"for service '{self.get_service_name()}' on attempt {try_count + 1}: {e}"
+            )
             if response is not None:
                 log.error(f"Solr response: {response.text}")
+            if try_count < self.SOLR_WRITE_MAX_RETRIES:
+                sleep_seconds = (
+                    self.SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS
+                    + try_count * self.SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS
+                )
+                log.info(
+                    f"Retrying Solr write for service '{self.get_service_name()}' in {sleep_seconds} seconds "
+                    f"(retry {try_count + 1} of {self.SOLR_WRITE_MAX_RETRIES})."
+                )
+                time.sleep(sleep_seconds)
+                return self.write_to_solr(solr_docs, try_count=try_count + 1)
+            log.error(
+                f"Giving up indexing {len(solr_data_list)} documents to Solr for service "
+                f"'{self.get_service_name()}' after {try_count + 1} attempts."
+            )
 
     @abstractmethod
     def get_parameters_query(self) -> Optional[str]:

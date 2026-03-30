@@ -1,5 +1,6 @@
 import os
 import unittest
+
 from src.indexers.base_query_indexer import BaseQueryIndexer
 from src.indexers.anat_image_query_indexer import AnatImageQueryIndexer
 from src.indexers.anat_query_indexer import AnatQueryIndexer
