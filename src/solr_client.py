@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional, Sequence, Set
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,6 +40,59 @@ def get_solr_update_url() -> Optional[str]:
         return None
 
     return f"{solr_server.rstrip('/')}/{solr_collection}/update"
+
+
+def get_solr_select_url() -> Optional[str]:
+    solr_server = os.getenv("SOLRserver")
+    solr_collection = os.getenv("SOLRcollection")
+
+    if not solr_server or not solr_collection:
+        log.error("SOLRserver or SOLRcollection environment variable is not set.")
+        return None
+
+    return f"{solr_server.rstrip('/')}/{solr_collection}/select"
+
+
+def fetch_ids_with_field(service_name: str) -> Set[str]:
+    """Return the set of Solr doc ids that already have the given service field
+    populated. Used to prioritise docs that are missing from Solr on the first
+    pass of an indexer run.
+
+    On any failure returns an empty set — callers should treat that as "nothing
+    is known to exist", which preserves the original indexing order (all docs
+    treated as missing) and never blocks the run.
+    """
+    solr_select_url = get_solr_select_url()
+    if not solr_select_url:
+        return set()
+
+    params = {
+        "q": f"{service_name}:[* TO *]",
+        "fl": "id",
+        "rows": "10000000",
+        "wt": "json",
+    }
+
+    try:
+        response = _SESSION.get(
+            solr_select_url,
+            params=params,
+            timeout=SOLR_WRITE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
+        docs = data.get("response", {}).get("docs", [])
+        ids = {doc["id"] for doc in docs if "id" in doc}
+        log.info(
+            f"Solr reports {len(ids)} existing documents for service '{service_name}'."
+        )
+        return ids
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        log.warning(
+            f"Could not fetch existing ids for service '{service_name}': {exc}. "
+            f"Proceeding without missing-first prioritisation."
+        )
+        return set()
 
 
 def send_solr_docs(solr_docs: Sequence[Dict], service_name: str) -> bool:

@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 import requests
 from vfb_connect.neo.neo4j_tools import Neo4jConnect, dict_cursor
 from src.vfb.vfb_query_builder.query_roller import QueryLibrary
-from src.solr_client import send_solr_docs, send_final_commit
+from src.solr_client import send_solr_docs, send_final_commit, fetch_ids_with_field
 from tqdm import tqdm
 from socket import error as SocketError
 
@@ -40,8 +40,24 @@ class BaseQueryIndexer(ABC):
     def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
-        log.info(f"Crawling: '{self.get_service_name()}' ({self.__class__.__name__}), "
+        service_name = self.get_service_name()
+        log.info(f"Crawling: '{service_name}' ({self.__class__.__name__}), "
                  f"Batch size: {batch_size}, Start time: {start_time}")
+
+        # Reorder ids so the ones currently missing from Solr for this service
+        # are processed first. If the job is killed midway the site already has
+        # complete coverage; already-present docs are refreshed in the second
+        # half of the run.
+        existing = fetch_ids_with_field(service_name)
+        if existing:
+            missing = [i for i in ids if i not in existing]
+            stale = [i for i in ids if i in existing]
+            log.info(
+                f"{service_name}: {len(missing)} missing, {len(stale)} existing "
+                f"(processing missing first)."
+            )
+            ids = missing + stale
+
         chunks = get_chunks(ids, batch_size)
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
 
