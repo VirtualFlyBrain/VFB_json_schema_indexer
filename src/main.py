@@ -23,7 +23,10 @@ from src.indexers.scRNAseq.anat_scRNAseq_query_indexer import AnatScRNASeqQueryI
 from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpressionQueryIndexer
 from src.indexers.connectivity.neuron_downstream_connectivity_indexer import NeuronDownstreamConnectivityIndexer
 from src.indexers.connectivity.neuron_upstream_connectivity_indexer import NeuronUpstreamConnectivityIndexer
-from src.solr_client import send_solr_docs, send_solr_payload
+from src.solr_client import send_solr_docs, send_solr_payload, send_final_commit
+from tqdm import tqdm
+
+COMBINED_INDEX_CHUNK = int(os.getenv("COMBINED_INDEX_CHUNK", 5000))
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -135,7 +138,27 @@ def prepare_for_atomic_update(service_data: Dict[str, Dict]) -> None:
             doc_fields[field_name] = {'set': field_value}
 
 def update_solr_with_data(solr_data: Dict[str, Dict]) -> None:
-    send_solr_docs(solr_data.values(), service_name="combined_index")
+    """Chunk the combined_index write. Previously this shipped ~749k docs in a
+    single POST which repeatedly timed out; chunking keeps each request well
+    under SOLR_WRITE_TIMEOUT_SECONDS and plays nicely with commitWithin.
+    """
+    docs = list(solr_data.values())
+    total = len(docs)
+    if total == 0:
+        log.info("combined_index: no documents to index.")
+        return
+
+    for start in tqdm(
+        range(0, total, COMBINED_INDEX_CHUNK),
+        total=(total + COMBINED_INDEX_CHUNK - 1) // COMBINED_INDEX_CHUNK,
+        desc="combined_index",
+    ):
+        send_solr_docs(
+            docs[start:start + COMBINED_INDEX_CHUNK],
+            service_name="combined_index",
+        )
+
+    send_final_commit("combined_index")
 
 
 def update_solr(payload, service_name: str = "combined_index") -> None:

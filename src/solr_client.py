@@ -5,13 +5,30 @@ import time
 from typing import Dict, Optional, Sequence
 
 import requests
+from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
-SOLR_WRITE_MAX_RETRIES = int(os.getenv("SOLR_WRITE_MAX_RETRIES", 10))
-SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS", 30))
-SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS = int(os.getenv("SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS", 15))
-SOLR_WRITE_TIMEOUT_SECONDS = int(os.getenv("SOLR_WRITE_TIMEOUT_SECONDS", 60))
+# Retry / timeout configuration.
+# Defaults retuned for the upgraded (high-RAM) Solr server: commits are no
+# longer forced on every batch (see SOLR_COMMIT_WITHIN_MS), so individual
+# writes are cheap and retries can start fast and back off exponentially.
+SOLR_WRITE_MAX_RETRIES = int(os.getenv("SOLR_WRITE_MAX_RETRIES", 5))
+SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS", 5))
+SOLR_WRITE_RETRY_MAX_DELAY_SECONDS = int(os.getenv("SOLR_WRITE_RETRY_MAX_DELAY_SECONDS", 120))
+SOLR_WRITE_TIMEOUT_SECONDS = int(os.getenv("SOLR_WRITE_TIMEOUT_SECONDS", 180))
+
+# Let Solr batch commits server-side rather than issuing a hard commit on every
+# single POST. A final explicit commit is issued via send_final_commit() at the
+# end of each service run.
+SOLR_COMMIT_WITHIN_MS = int(os.getenv("SOLR_COMMIT_WITHIN_MS", 60000))
+
+# Module-level session so TCP/TLS connections are reused across every POST.
+# Without this the loader paid a full handshake on every ~150 batches.
+_SESSION = requests.Session()
+_ADAPTER = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
+_SESSION.mount("http://", _ADAPTER)
+_SESSION.mount("https://", _ADAPTER)
 
 
 def get_solr_update_url() -> Optional[str]:
@@ -39,8 +56,11 @@ def send_solr_payload(
     payload: str,
     service_name: str,
     document_count: Optional[int] = None,
-    try_count: int = 0,
 ) -> bool:
+    """POST a JSON payload to the Solr update endpoint with capped exponential
+    retry. Commits are deferred via commitWithin; call send_final_commit() at
+    the end of a service run to make changes searchable immediately.
+    """
     solr_update_url = get_solr_update_url()
     if not solr_update_url:
         return False
@@ -50,63 +70,99 @@ def send_solr_payload(
         "Accept": "application/json",
     }
     params = {
-        "commit": "true",
+        "commitWithin": str(SOLR_COMMIT_WITHIN_MS),
         "wt": "json",
     }
 
     log.debug(f"Solr update URL: {solr_update_url}")
     log.debug(f"Data being sent to Solr: {payload}")
 
-    try:
-        response = requests.post(
-            solr_update_url,
-            params=params,
-            data=payload,
-            headers=headers,
-            timeout=SOLR_WRITE_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        if document_count is None:
-            log.info(f"Indexed Solr payload for service '{service_name}' and committed changes.")
-        else:
-            log.info(
-                f"Indexed {document_count} documents to Solr for service '{service_name}' "
-                f"and committed changes."
+    failure_scope = (
+        f"{document_count} documents" if document_count is not None else "payload"
+    )
+
+    for attempt in range(SOLR_WRITE_MAX_RETRIES + 1):
+        try:
+            response = _SESSION.post(
+                solr_update_url,
+                params=params,
+                data=payload,
+                headers=headers,
+                timeout=SOLR_WRITE_TIMEOUT_SECONDS,
             )
-        log.debug(f"Solr response: {response.text}")
-        return True
-    except requests.exceptions.RequestException as exc:
-        response = getattr(exc, "response", None)
-        failure_scope = (
-            f"{document_count} documents"
-            if document_count is not None
-            else "payload"
-        )
-        log.warning(
-            f"Failed to index {failure_scope} to Solr for service '{service_name}' "
-            f"on attempt {try_count + 1}: {exc}"
-        )
-        if response is not None and response.text:
-            log.error(f"Solr response: {response.text}")
-        if try_count < SOLR_WRITE_MAX_RETRIES:
-            sleep_seconds = (
-                SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS
-                + try_count * SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS
+            response.raise_for_status()
+            if document_count is None:
+                log.info(f"Indexed Solr payload for service '{service_name}'.")
+            else:
+                log.info(
+                    f"Indexed {document_count} documents to Solr for service '{service_name}'."
+                )
+            log.debug(f"Solr response: {response.text}")
+            return True
+        except requests.exceptions.RequestException as exc:
+            response = getattr(exc, "response", None)
+            log.warning(
+                f"Failed to index {failure_scope} to Solr for service '{service_name}' "
+                f"on attempt {attempt + 1}: {exc}"
+            )
+            if response is not None and response.text:
+                log.error(f"Solr response: {response.text}")
+
+            if attempt >= SOLR_WRITE_MAX_RETRIES:
+                log.error(
+                    f"Giving up indexing {failure_scope} to Solr for service "
+                    f"'{service_name}' after {attempt + 1} attempts."
+                )
+                return False
+
+            sleep_seconds = min(
+                SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS * (2 ** attempt),
+                SOLR_WRITE_RETRY_MAX_DELAY_SECONDS,
             )
             log.info(
                 f"Retrying Solr write for service '{service_name}' in {sleep_seconds} seconds "
-                f"(retry {try_count + 1} of {SOLR_WRITE_MAX_RETRIES})."
+                f"(retry {attempt + 1} of {SOLR_WRITE_MAX_RETRIES})."
             )
             time.sleep(sleep_seconds)
-            return send_solr_payload(
-                payload,
-                service_name=service_name,
-                document_count=document_count,
-                try_count=try_count + 1,
-            )
 
-        log.error(
-            f"Giving up indexing {failure_scope} to Solr for service '{service_name}' "
-            f"after {try_count + 1} attempts."
-        )
+    return False
+
+
+def send_final_commit(service_name: str) -> bool:
+    """Issue a single hard commit at the end of a service run so any docs
+    still buffered by commitWithin become searchable immediately.
+    """
+    solr_update_url = get_solr_update_url()
+    if not solr_update_url:
         return False
+
+    params = {"commit": "true", "waitSearcher": "true", "wt": "json"}
+
+    for attempt in range(SOLR_WRITE_MAX_RETRIES + 1):
+        try:
+            response = _SESSION.get(
+                solr_update_url,
+                params=params,
+                timeout=SOLR_WRITE_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            log.info(f"Final commit issued for service '{service_name}'.")
+            return True
+        except requests.exceptions.RequestException as exc:
+            log.warning(
+                f"Final commit failed for service '{service_name}' on attempt "
+                f"{attempt + 1}: {exc}"
+            )
+            if attempt >= SOLR_WRITE_MAX_RETRIES:
+                log.error(
+                    f"Giving up on final commit for service '{service_name}' "
+                    f"after {attempt + 1} attempts."
+                )
+                return False
+            sleep_seconds = min(
+                SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS * (2 ** attempt),
+                SOLR_WRITE_RETRY_MAX_DELAY_SECONDS,
+            )
+            time.sleep(sleep_seconds)
+
+    return False

@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 import requests
 from vfb_connect.neo.neo4j_tools import Neo4jConnect, dict_cursor
 from src.vfb.vfb_query_builder.query_roller import QueryLibrary
-from src.solr_client import send_solr_docs
+from src.solr_client import send_solr_docs, send_final_commit
 from tqdm import tqdm
 from socket import error as SocketError
 
@@ -23,7 +23,7 @@ class BaseQueryIndexer(ABC):
     Crawls a VFB_json_schema service with all possible parameters and generates related Solr indexes.
     """
 
-    REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 2000))
     def __init__(self) -> None:
         self.ql = QueryLibrary()
         self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
@@ -77,6 +77,11 @@ class BaseQueryIndexer(ABC):
 
             # Remove the file after processing
             os.remove(exported_file_path)
+
+        # Issue a single hard commit for this service now that all batches have
+        # been POSTed. Individual batches use commitWithin (see solr_client.py)
+        # so we avoid thousands of per-batch Lucene flushes.
+        send_final_commit(self.get_service_name())
 
         end_time = datetime.datetime.now()
         diff = end_time - start_time
