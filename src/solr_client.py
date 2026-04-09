@@ -127,7 +127,7 @@ def fetch_ids_with_field(ids: Iterable[str], service_name: str) -> Set[str]:
 def send_solr_docs(solr_docs: Sequence[Dict], service_name: str) -> bool:
     docs = list(solr_docs)
     if not docs:
-        log.info(f"No documents to index to Solr for service '{service_name}'.")
+        log.debug(f"No documents to index to Solr for service '{service_name}'.")
         return True
 
     payload = json.dumps(docs)

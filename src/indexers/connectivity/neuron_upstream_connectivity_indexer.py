@@ -21,7 +21,19 @@ class NeuronUpstreamConnectivityIndexer(BaseQueryIndexer):
         return "upstream_connectivity_query"
 
     def get_parameters_query(self) -> str:
-        return "MATCH (n:Class:Neuron) RETURN collect(distinct n.short_form) as ids"
+        # Only return Class:Neuron parents that have at least one instance
+        # carrying the :has_neuron_connectivity label from a non-excluded
+        # data source. The label itself guarantees the instance participates
+        # in a synapsed_to edge, so there's no need to traverse it here.
+        return (
+            "MATCH (primary:Class:Neuron)<-[:SUBCLASSOF*0..]-(:Class:Neuron)"
+            "<-[:INSTANCEOF]-(n1:Individual:Neuron:has_neuron_connectivity)"
+            "-[:database_cross_reference]->"
+            "(s:Individual:Site {is_data_source:[True]}) "
+            "WHERE NOT (s.short_form IN ['neuprint_JRC_Hemibrain_1point2point1', 'catmaid_fafb']) "
+            "AND NOT (s.symbol[0] IN ['hb', 'fafb']) "
+            "RETURN collect(DISTINCT primary.short_form) AS ids"
+        )
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         ids_str = "['" + "', '".join(ids) + "']"
