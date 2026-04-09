@@ -73,27 +73,36 @@ def main() -> None:
     # Create a ThreadPoolExecutor for Solr updates
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         future_to_indexer = {}
-        for indexer in indexers:
-            service_data = indexer.generate_index()
-            prepare_for_atomic_update(service_data)
-            # Submit the Solr update task to the executor
-            future = executor.submit(update_solr_with_data, service_data)
-            future_to_indexer[future] = indexer
-            # Proceed to the next indexer without waiting for Solr update
-            merge_to_main_index(all_data, service_data)
+
+        # Two-phase global run: first fill every indexer's MISSING docs, only
+        # then refresh STALE ones. If the job dies midway the site already has
+        # first-time coverage across every service, rather than full coverage
+        # for the first few services and nothing for the rest.
+        for phase in ("missing", "stale"):
+            log.info(f"=== Starting phase '{phase}' for all indexers ===")
+            for indexer in indexers:
+                service_data = indexer.generate_index(phase=phase)
+                if not service_data:
+                    continue
+                prepare_for_atomic_update(service_data)
+                # Submit the Solr update task to the executor
+                future = executor.submit(update_solr_with_data, service_data)
+                future_to_indexer[future] = (indexer, phase)
+                # Proceed to the next indexer without waiting for Solr update
+                merge_to_main_index(all_data, service_data)
 
         # Optionally, dump all data to a file
         dump_dict_to_file(all_data, os.getenv('OutputPath', BATCH_FILE_LOCATION))
 
         # Wait for all Solr updates to complete and handle exceptions
         for future in concurrent.futures.as_completed(future_to_indexer):
-            indexer = future_to_indexer[future]
+            indexer, phase = future_to_indexer[future]
             try:
                 future.result()
             except Exception as exc:
-                log.error('%r generated an exception: %s' % (indexer, exc))
+                log.error('%r (phase=%s) generated an exception: %s' % (indexer, phase, exc))
             else:
-                log.info('%r Solr update completed successfully.' % (indexer,))
+                log.info('%r (phase=%s) Solr update completed successfully.' % (indexer, phase))
 
 
 def merge_to_main_index(all_data: Dict[str, Dict], service_data: Dict[str, Dict]) -> None:

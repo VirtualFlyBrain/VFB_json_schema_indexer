@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Optional, Sequence, Set
+from typing import Dict, Iterable, Optional, Sequence, Set
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -53,10 +53,22 @@ def get_solr_select_url() -> Optional[str]:
     return f"{solr_server.rstrip('/')}/{solr_collection}/select"
 
 
-def fetch_ids_with_field(service_name: str) -> Set[str]:
-    """Return the set of Solr doc ids that already have the given service field
-    populated. Used to prioritise docs that are missing from Solr on the first
-    pass of an indexer run.
+SOLR_EXISTENCE_PROBE_CHUNK = int(os.getenv("SOLR_EXISTENCE_PROBE_CHUNK", 1000))
+
+
+def fetch_ids_with_field(ids: Iterable[str], service_name: str) -> Set[str]:
+    """Given a list of candidate ids, return the subset that already has the
+    given service field populated in Solr.
+
+    Used to prioritise docs that are missing from Solr on the first pass of an
+    indexer run. Probes by id because the per-service JSON payload fields are
+    typically stored but not indexed, so a range query
+    ``<service_name>:[* TO *]`` returns nothing even when every doc has the
+    field populated.
+
+    Ids are chunked and POSTed to ``/select`` using the ``terms`` query parser
+    so the URL length doesn't blow up. A doc is considered "populated" if the
+    service field is present and non-empty in the returned stored value.
 
     On any failure returns an empty set — callers should treat that as "nothing
     is known to exist", which preserves the original indexing order (all docs
@@ -66,30 +78,47 @@ def fetch_ids_with_field(service_name: str) -> Set[str]:
     if not solr_select_url:
         return set()
 
-    params = {
-        "q": f"{service_name}:[* TO *]",
-        "fl": "id",
-        "rows": "10000000",
-        "wt": "json",
-    }
+    id_list = [i for i in ids if i]
+    if not id_list:
+        return set()
+
+    populated: Set[str] = set()
 
     try:
-        response = _SESSION.get(
-            solr_select_url,
-            params=params,
-            timeout=SOLR_WRITE_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        data = response.json()
-        docs = data.get("response", {}).get("docs", [])
-        ids = {doc["id"] for doc in docs if "id" in doc}
+        for start in range(0, len(id_list), SOLR_EXISTENCE_PROBE_CHUNK):
+            chunk = id_list[start:start + SOLR_EXISTENCE_PROBE_CHUNK]
+            # {!terms f=id}a,b,c is the cheapest way to match many exact ids.
+            data = {
+                "q": "{!terms f=id}" + ",".join(chunk),
+                "fl": f"id,{service_name}",
+                "rows": str(len(chunk)),
+                "wt": "json",
+            }
+            response = _SESSION.post(
+                solr_select_url,
+                data=data,
+                timeout=SOLR_WRITE_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            docs = response.json().get("response", {}).get("docs", [])
+            for doc in docs:
+                doc_id = doc.get("id")
+                if not doc_id:
+                    continue
+                value = doc.get(service_name)
+                if isinstance(value, list):
+                    value = value[0] if value else None
+                if value:  # non-empty string / dict / etc.
+                    populated.add(doc_id)
+
         log.info(
-            f"Solr reports {len(ids)} existing documents for service '{service_name}'."
+            f"Solr reports {len(populated)}/{len(id_list)} existing documents "
+            f"for service '{service_name}'."
         )
-        return ids
+        return populated
     except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
         log.warning(
-            f"Could not fetch existing ids for service '{service_name}': {exc}. "
+            f"Could not probe existing ids for service '{service_name}': {exc}. "
             f"Proceeding without missing-first prioritisation."
         )
         return set()

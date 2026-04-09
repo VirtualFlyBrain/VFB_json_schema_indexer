@@ -4,7 +4,7 @@ import json
 import logging
 import datetime
 import time
-from typing import List, Dict, Generator, Optional
+from typing import List, Dict, Generator, Optional, Tuple
 from abc import ABC, abstractmethod
 
 import requests
@@ -27,36 +27,61 @@ class BaseQueryIndexer(ABC):
     def __init__(self) -> None:
         self.ql = QueryLibrary()
         self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
+        self._id_partition: Optional[Tuple[List[str], List[str]]] = None
 
-    def generate_index(self) -> Dict[str, Dict]:
+    def partition_ids(self) -> Tuple[List[str], List[str]]:
+        """Partition this indexer's parameter ids into (missing, stale) by
+        probing Solr once. Cached on the instance so repeat calls (phase 1 and
+        phase 2 of the global run) don't re-probe — and so phase 2 still sees
+        the ORIGINAL stale set even though phase 1 has since populated those
+        ids.
         """
-        Crawls VFB_json_schema API with all possible parameters and generates the Solr index data.
+        if self._id_partition is None:
+            ids = self.get_query_parameters()
+            service_name = self.get_service_name()
+            existing = fetch_ids_with_field(ids, service_name)
+            missing = [i for i in ids if i not in existing]
+            stale = [i for i in ids if i in existing]
+            log.info(
+                f"{service_name}: {len(missing)} missing, {len(stale)} existing."
+            )
+            self._id_partition = (missing, stale)
+        return self._id_partition
+
+    def generate_index(self, phase: str = "all") -> Dict[str, Dict]:
+        """
+        Crawls VFB_json_schema API and generates Solr index data for the
+        requested phase.
+
+        :param phase: "missing" (docs absent from Solr), "stale" (docs present
+            in Solr, refreshing them), or "all" (every id, no probing).
         :return: Dictionary of Solr data. Short_form as key, Solr data as value
         """
-        ids = self.get_query_parameters()
-        index_data = self.crawl_vfb_json_data(ids)
-        return index_data
+        if phase == "all":
+            ids = self.get_query_parameters()
+        else:
+            missing, stale = self.partition_ids()
+            if phase == "missing":
+                ids = missing
+            elif phase == "stale":
+                ids = stale
+            else:
+                raise ValueError(f"Unknown phase: {phase}")
+
+        if not ids:
+            log.info(
+                f"{self.get_service_name()}: nothing to do for phase '{phase}'."
+            )
+            return {}
+
+        return self.crawl_vfb_json_data(ids)
 
     def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
         service_name = self.get_service_name()
         log.info(f"Crawling: '{service_name}' ({self.__class__.__name__}), "
-                 f"Batch size: {batch_size}, Start time: {start_time}")
-
-        # Reorder ids so the ones currently missing from Solr for this service
-        # are processed first. If the job is killed midway the site already has
-        # complete coverage; already-present docs are refreshed in the second
-        # half of the run.
-        existing = fetch_ids_with_field(service_name)
-        if existing:
-            missing = [i for i in ids if i not in existing]
-            stale = [i for i in ids if i in existing]
-            log.info(
-                f"{service_name}: {len(missing)} missing, {len(stale)} existing "
-                f"(processing missing first)."
-            )
-            ids = missing + stale
+                 f"Batch size: {batch_size}, ids: {len(ids)}, Start time: {start_time}")
 
         chunks = get_chunks(ids, batch_size)
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
