@@ -17,6 +17,12 @@ from socket import error as SocketError
 log = logging.getLogger(__name__)
 
 
+NEO4J_MAX_RETRY_WAIT_SECONDS = int(os.getenv("NEO4J_MAX_RETRY_WAIT_SECONDS", 1200))  # 20 min
+NEO4J_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("NEO4J_RETRY_INITIAL_DELAY_SECONDS", 5))
+NEO4J_RETRY_MAX_DELAY_SECONDS = int(os.getenv("NEO4J_RETRY_MAX_DELAY_SECONDS", 120))
+NEO4J_HEALTH_CHECK_INTERVAL = 30  # seconds between pings
+
+
 class BaseQueryIndexer(ABC):
     """
     Base query class that provides an abstraction for the concrete service crawlers.
@@ -184,13 +190,47 @@ class BaseQueryIndexer(ABC):
             parameters.append("")
         return parameters
 
-    def execute_query(self, query: str, params: Dict = None, output_file: str = None, try_count=0) -> None:
+    def _wait_for_neo4j(self, deadline: float) -> bool:
+        """Lightweight ping — polls Neo4j until it responds or deadline passes."""
+        url = f"{self.nc.base_uri}{self.nc.commit}"
+        # Send a trivial read-only query as a health check.
+        ping_payload = json.dumps({'statements': [{'statement': 'RETURN 1'}]})
+        headers = {'Content-Type': 'application/json'}
+
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            try:
+                r = requests.post(
+                    url=url,
+                    auth=(self.nc.usr, self.nc.pwd),
+                    data=ping_payload,
+                    headers=headers,
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    return True
+                log.info(f"Neo4j ping returned {r.status_code}, waiting...")
+            except requests.exceptions.RequestException:
+                pass
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            sleep_time = min(NEO4J_HEALTH_CHECK_INTERVAL, remaining)
+            log.info(
+                f"Waiting {sleep_time:.0f}s for Neo4j to become available... "
+                f"({remaining:.0f}s remaining before giving up)"
+            )
+            time.sleep(sleep_time)
+
+    def execute_query(self, query: str, params: Dict = None, output_file: str = None) -> None:
         """
         Executes given Cypher query in Neo4j and exports the result to a file on the server.
         :param query: Cypher query to execute
         :param params: Query parameters
         :param output_file: Path to the output file on the Neo4j server (e.g., "file:///import/output.json")
-        :param try_count: Retry count
         """
         # Escape double quotes in the query
         escaped_query = query.replace('"', '\\"')
@@ -210,72 +250,130 @@ class BaseQueryIndexer(ABC):
             'parameters': {'params': params} if params else {}
         }]
 
-        payload = {'statements': cstatements}
+        payload = json.dumps({'statements': cstatements})
         headers = {'Content-Type': 'application/json'}
 
-        try:
-            response = requests.post(
-                url=f"{self.nc.base_uri}{self.nc.commit}",
-                auth=(self.nc.usr, self.nc.pwd),
-                data=json.dumps(payload),
-                headers=headers
-            )
-            response.raise_for_status()
-            response_json = response.json()
-            if 'errors' in response_json and response_json['errors']:
-                log.error(f"Neo4j returned errors: {response_json['errors']}")
-                raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
-            else:
-                log.info(f"Exported data For {params['ids'][0]} to {params['ids'][-1]}")
-        except requests.exceptions.RequestException as e:
-            log.warning(str(e))
-            if try_count < 10:
-                time.sleep(30 + try_count * 15)
-                return self.execute_query(query, params=params, output_file=output_file, try_count=try_count + 1)
-            else:
-                raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
+        deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+        attempt = 0
 
-    def run_query(self, query: str, params: Dict = None, try_count=0) -> List[Dict]:
+        while True:
+            try:
+                response = requests.post(
+                    url=f"{self.nc.base_uri}{self.nc.commit}",
+                    auth=(self.nc.usr, self.nc.pwd),
+                    data=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+                response_json = response.json()
+                if 'errors' in response_json and response_json['errors']:
+                    log.error(f"Neo4j returned errors: {response_json['errors']}")
+                    raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
+                log.info(f"Exported data For {params['ids'][0]} to {params['ids'][-1]}")
+                return
+            except requests.exceptions.RequestException as e:
+                attempt += 1
+                log.warning(str(e))
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise Neo4jQueryException(
+                        f"{self.get_service_name()} query failed after {attempt} attempts "
+                        f"({NEO4J_MAX_RETRY_WAIT_SECONDS}s deadline exceeded): {e}"
+                    )
+
+                log.info(
+                    f"Waiting for Neo4j to become available before retrying "
+                    f"({remaining:.0f}s remaining)..."
+                )
+                if not self._wait_for_neo4j(deadline):
+                    raise Neo4jQueryException(
+                        f"Neo4j did not become available within "
+                        f"{NEO4J_MAX_RETRY_WAIT_SECONDS}s for {self.get_service_name()}: {e}"
+                    )
+
+                # Brief back-off after ping succeeds.
+                backoff = min(
+                    NEO4J_RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempt - 1)),
+                    NEO4J_RETRY_MAX_DELAY_SECONDS,
+                )
+                backoff = min(backoff, deadline - time.time())
+                if backoff > 0:
+                    log.info(
+                        f"Neo4j is back. Retrying query for {self.get_service_name()} "
+                        f"in {backoff:.0f}s (attempt {attempt + 1})."
+                    )
+                    time.sleep(backoff)
+
+    def run_query(self, query: str, params: Dict = None) -> List[Dict]:
         """
         Executes given Cypher query in Neo4j and returns the results.
         """
-        results = []
         cstatements = [{
             'statement': query,
             'parameters': params or {}
         }]
 
-        payload = {'statements': cstatements}
+        payload = json.dumps({'statements': cstatements})
         headers = {'Content-Type': 'application/json'}
 
-        try:
-            response = requests.post(
-                url=f"{self.nc.base_uri}{self.nc.commit}",
-                auth=(self.nc.usr, self.nc.pwd),
-                data=json.dumps(payload),
-                headers=headers
-            )
-            response.raise_for_status()
-            response_json = response.json()
-            if 'errors' in response_json and response_json['errors']:
-                log.error(f"Neo4j returned errors: {response_json['errors']}")
-                raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
-            else:
-                # Process results into a list of dicts
+        deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+        attempt = 0
+
+        while True:
+            try:
+                response = requests.post(
+                    url=f"{self.nc.base_uri}{self.nc.commit}",
+                    auth=(self.nc.usr, self.nc.pwd),
+                    data=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+                response_json = response.json()
+                if 'errors' in response_json and response_json['errors']:
+                    log.error(f"Neo4j returned errors: {response_json['errors']}")
+                    raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
+
+                results = []
                 for result in response_json['results']:
                     columns = result['columns']
                     for data_row in result['data']:
                         row = data_row['row']
                         result_dict = dict(zip(columns, row))
                         results.append(result_dict)
-        except requests.exceptions.RequestException as e:
-            log.warning(str(e))
-            if try_count < 10:
-                time.sleep(30 + try_count * 15)
-                return self.run_query(query, params=params, try_count=try_count + 1)
-            else:
-                raise Neo4jQueryException(self.get_service_name() + " query failed: " + str(e))
-        return results
+                return results
+            except requests.exceptions.RequestException as e:
+                attempt += 1
+                log.warning(str(e))
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise Neo4jQueryException(
+                        f"{self.get_service_name()} query failed after {attempt} attempts "
+                        f"({NEO4J_MAX_RETRY_WAIT_SECONDS}s deadline exceeded): {e}"
+                    )
+
+                log.info(
+                    f"Waiting for Neo4j to become available before retrying "
+                    f"({remaining:.0f}s remaining)..."
+                )
+                if not self._wait_for_neo4j(deadline):
+                    raise Neo4jQueryException(
+                        f"Neo4j did not become available within "
+                        f"{NEO4J_MAX_RETRY_WAIT_SECONDS}s for {self.get_service_name()}: {e}"
+                    )
+
+                backoff = min(
+                    NEO4J_RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempt - 1)),
+                    NEO4J_RETRY_MAX_DELAY_SECONDS,
+                )
+                backoff = min(backoff, deadline - time.time())
+                if backoff > 0:
+                    log.info(
+                        f"Neo4j is back. Retrying query for {self.get_service_name()} "
+                        f"in {backoff:.0f}s (attempt {attempt + 1})."
+                    )
+                    time.sleep(backoff)
 
     def write_to_solr(self, solr_docs: Dict[str, Dict]) -> None:
         """
