@@ -270,7 +270,9 @@ class BaseQueryIndexer(ABC):
         payload = json.dumps({'statements': cstatements})
         headers = {'Content-Type': 'application/json'}
 
-        deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+        # Start the retry window only after the first failure so slow but
+        # otherwise valid queries still get a full recovery budget.
+        retry_deadline = None
         attempt = 0
 
         while True:
@@ -292,7 +294,10 @@ class BaseQueryIndexer(ABC):
                 attempt += 1
                 log.warning(str(e))
 
-                remaining = deadline - time.time()
+                if retry_deadline is None:
+                    retry_deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+
+                remaining = retry_deadline - time.time()
                 if remaining <= 0:
                     raise Neo4jQueryException(
                         f"{self.get_service_name()} query failed after {attempt} attempts "
@@ -303,7 +308,7 @@ class BaseQueryIndexer(ABC):
                     f"Waiting for Neo4j to become available before retrying "
                     f"({remaining:.0f}s remaining)..."
                 )
-                if not self._wait_for_neo4j(deadline):
+                if not self._wait_for_neo4j(retry_deadline):
                     raise Neo4jQueryException(
                         f"Neo4j did not become available within "
                         f"{NEO4J_MAX_RETRY_WAIT_SECONDS}s for {self.get_service_name()}: {e}"
@@ -314,7 +319,7 @@ class BaseQueryIndexer(ABC):
                     NEO4J_RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempt - 1)),
                     NEO4J_RETRY_MAX_DELAY_SECONDS,
                 )
-                backoff = min(backoff, deadline - time.time())
+                backoff = min(backoff, retry_deadline - time.time())
                 if backoff > 0:
                     log.info(
                         f"Neo4j is back. Retrying query for {self.get_service_name()} "
@@ -334,7 +339,9 @@ class BaseQueryIndexer(ABC):
         payload = json.dumps({'statements': cstatements})
         headers = {'Content-Type': 'application/json'}
 
-        deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+        # Start the retry window only after the first failure so slow but
+        # otherwise valid queries still get a full recovery budget.
+        retry_deadline = None
         attempt = 0
 
         while True:
@@ -363,7 +370,10 @@ class BaseQueryIndexer(ABC):
                 attempt += 1
                 log.warning(str(e))
 
-                remaining = deadline - time.time()
+                if retry_deadline is None:
+                    retry_deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
+
+                remaining = retry_deadline - time.time()
                 if remaining <= 0:
                     raise Neo4jQueryException(
                         f"{self.get_service_name()} query failed after {attempt} attempts "
@@ -374,7 +384,7 @@ class BaseQueryIndexer(ABC):
                     f"Waiting for Neo4j to become available before retrying "
                     f"({remaining:.0f}s remaining)..."
                 )
-                if not self._wait_for_neo4j(deadline):
+                if not self._wait_for_neo4j(retry_deadline):
                     raise Neo4jQueryException(
                         f"Neo4j did not become available within "
                         f"{NEO4J_MAX_RETRY_WAIT_SECONDS}s for {self.get_service_name()}: {e}"
@@ -384,7 +394,7 @@ class BaseQueryIndexer(ABC):
                     NEO4J_RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempt - 1)),
                     NEO4J_RETRY_MAX_DELAY_SECONDS,
                 )
-                backoff = min(backoff, deadline - time.time())
+                backoff = min(backoff, retry_deadline - time.time())
                 if backoff > 0:
                     log.info(
                         f"Neo4j is back. Retrying query for {self.get_service_name()} "

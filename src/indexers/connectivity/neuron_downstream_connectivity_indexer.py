@@ -46,6 +46,13 @@ class NeuronDownstreamConnectivityIndexer(BaseQueryIndexer):
         return (
             f"MATCH (c1:Class:Neuron) WHERE c1.short_form IN {ids_str}\n"
             "WITH c1\n"
+            # Total instances of c1 in non-excluded connectomes (for percent_connected).
+            "MATCH (c1)<-[:INSTANCEOF]-(all_n1:Individual:has_neuron_connectivity)"
+            "-[:database_cross_reference]->"
+            "(s2:Individual:Site {is_data_source:[True]})\n"
+            "WHERE NOT (s2.short_form IN ['neuprint_JRC_Hemibrain_1point2point1', 'catmaid_fafb'])\n"
+            "AND NOT (s2.symbol[0] IN ['hb', 'fafb'])\n"
+            "WITH c1, count(DISTINCT all_n1) AS total_c1_instances\n"
             # Direct instances of c1 that synapse onto instances of c2.
             "MATCH (c1)<-[:INSTANCEOF]-(n1:Individual:Neuron:has_neuron_connectivity)"
             "-[r:synapsed_to]->"
@@ -55,18 +62,10 @@ class NeuronDownstreamConnectivityIndexer(BaseQueryIndexer):
             "MATCH (n1)-[:database_cross_reference]->(s:Individual:Site {is_data_source:[True]})\n"
             "WHERE NOT (s.short_form IN ['neuprint_JRC_Hemibrain_1point2point1', 'catmaid_fafb'])\n"
             "AND NOT (s.symbol[0] IN ['hb', 'fafb'])\n"
-            "WITH c1, c2,\n"
+            "WITH c1, c2, total_c1_instances,\n"
             "     count(*) AS pairwise_connections,\n"
             "     sum(r.weight[0]) AS total_weight,\n"
             "     count(DISTINCT n1) AS connected_count\n"
-            # Total instances of c1 in non-excluded connectomes (for percent_connected).
-            "MATCH (c1)<-[:INSTANCEOF]-(all_n1:Individual:has_neuron_connectivity)"
-            "-[:database_cross_reference]->"
-            "(s2:Individual:Site {is_data_source:[True]})\n"
-            "WHERE NOT (s2.short_form IN ['neuprint_JRC_Hemibrain_1point2point1', 'catmaid_fafb'])\n"
-            "AND NOT (s2.symbol[0] IN ['hb', 'fafb'])\n"
-            "WITH c1, c2, pairwise_connections, total_weight,\n"
-            "     connected_count, count(DISTINCT all_n1) AS total_c1_instances\n"
             "WITH c1, COLLECT({\n"
             "  downstream_class: c2.label,\n"
             "  downstream_class_id: c2.short_form,\n"
