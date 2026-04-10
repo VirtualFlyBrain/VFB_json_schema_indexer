@@ -116,6 +116,17 @@ class BaseQueryIndexer(ABC):
             # Process the file and collect the data
             batch_data = self.process_exported_file(exported_file_path)
 
+            # Cache empty results: if Neo4j returned nothing for some ids in
+            # this chunk, write an empty list to Solr so the id shows as
+            # "existing" on the next run rather than being re-queried forever.
+            service_name = self.get_service_name()
+            for doc_id in chunk:
+                if doc_id and doc_id not in batch_data:
+                    batch_data[doc_id] = {
+                        "id": doc_id,
+                        service_name: {"set": json.dumps([])}
+                    }
+
             # Write batch_data to Solr
             self.write_to_solr(batch_data)
 
