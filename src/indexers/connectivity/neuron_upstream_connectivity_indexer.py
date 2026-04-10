@@ -112,6 +112,8 @@ class NeuronUpstreamConnectivityIndexer(BaseQueryIndexer):
                 "class_connectivity": {
                     "upstream_class": conn["upstream_class"],
                     "upstream_class_id": conn["upstream_class_id"],
+                    "downstream_class": primary_label,
+                    "downstream_class_id": primary_id,
                     "total_upstream_count": conn["total_upstream_count"],
                     "connected_upstream_count": conn["connected_upstream_count"],
                     "percent_connected": conn["percent_connected"],

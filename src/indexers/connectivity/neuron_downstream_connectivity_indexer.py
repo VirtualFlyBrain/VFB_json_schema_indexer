@@ -108,6 +108,8 @@ class NeuronDownstreamConnectivityIndexer(BaseQueryIndexer):
                     "unique_facets": ["Class", "Neuron"]
                 },
                 "class_connectivity": {
+                    "upstream_class": primary_label,
+                    "upstream_class_id": primary_id,
                     "downstream_class": conn["downstream_class"],
                     "downstream_class_id": conn["downstream_class_id"],
                     "total_upstream_count": conn["total_upstream_count"],

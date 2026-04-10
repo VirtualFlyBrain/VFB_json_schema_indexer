@@ -19,12 +19,12 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
     def test_downstream_parameters_query(self):
         query = NeuronDownstreamConnectivityIndexer().get_parameters_query()
         self.assertIn("Class:Neuron", query)
-        self.assertIn("collect(distinct n.short_form) as ids", query)
+        self.assertIn("collect(DISTINCT c.short_form) AS ids", query)
 
     def test_upstream_parameters_query(self):
         query = NeuronUpstreamConnectivityIndexer().get_parameters_query()
         self.assertIn("Class:Neuron", query)
-        self.assertIn("collect(distinct n.short_form) as ids", query)
+        self.assertIn("collect(DISTINCT c.short_form) AS ids", query)
 
     # --- get_vfb_json_query — template form (called with ['$ID']) ---
 
@@ -39,7 +39,7 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
     def test_downstream_query_key_fragments(self):
         query = NeuronDownstreamConnectivityIndexer().get_vfb_json_query(["$ID"])
         self.assertIn("synapsed_to", query)
-        self.assertIn("SUBCLASSOF", query)
+        self.assertIn("INSTANCEOF", query)
         self.assertIn("hb", query)
         self.assertIn("fafb", query)
         self.assertIn("downstream_connections", query)
@@ -48,7 +48,7 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
     def test_upstream_query_key_fragments(self):
         query = NeuronUpstreamConnectivityIndexer().get_vfb_json_query(["$ID"])
         self.assertIn("synapsed_to", query)
-        self.assertIn("SUBCLASSOF", query)
+        self.assertIn("INSTANCEOF", query)
         self.assertIn("hb", query)
         self.assertIn("fafb", query)
         self.assertIn("upstream_connections", query)
@@ -63,8 +63,6 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
                 "class_label": "kenyon cell",
                 "downstream_connections": [
                     {
-                        "upstream_class": "kenyon cell",
-                        "upstream_class_id": "FBbt_00048514",
                         "downstream_class": "alpha-beta kenyon cell",
                         "downstream_class_id": "FBbt_00047988",
                         "total_upstream_count": 100,
@@ -81,18 +79,22 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
         doc = indexer.generate_solr_doc(result, request=None)
 
         self.assertEqual("FBbt_00048514", doc["id"])
-        self.assertIn("downstream_connectivity", doc)
-        payload = json.loads(doc["downstream_connectivity"]["set"])
-        self.assertEqual("FBbt_00048514", payload["downstream"]["class_id"])
-        connections = payload["downstream"]["downstream_connections"]
-        self.assertEqual(1, len(connections))
-        conn = connections[0]
-        self.assertIn("upstream_class", conn)
-        self.assertIn("downstream_class", conn)
-        self.assertIn("pairwise_connections", conn)
-        self.assertIn("percent_connected", conn)
-        self.assertIn("total_weight", conn)
-        self.assertIn("average_weight", conn)
+        self.assertIn("downstream_connectivity_query", doc)
+        payload = json.loads(doc["downstream_connectivity_query"]["set"])
+        self.assertEqual(1, len(payload))
+        conn = payload[0]
+        self.assertEqual("downstream_class_connectivity_query", conn["query"])
+        self.assertEqual("FBbt_00048514", conn["term"]["core"]["short_form"])
+        self.assertEqual("alpha-beta kenyon cell", conn["object"]["label"])
+        class_connectivity = conn["class_connectivity"]
+        self.assertEqual("kenyon cell", class_connectivity["upstream_class"])
+        self.assertEqual("FBbt_00048514", class_connectivity["upstream_class_id"])
+        self.assertEqual("alpha-beta kenyon cell", class_connectivity["downstream_class"])
+        self.assertEqual("FBbt_00047988", class_connectivity["downstream_class_id"])
+        self.assertEqual(500, class_connectivity["pairwise_connections"])
+        self.assertEqual(80.0, class_connectivity["percent_connected"])
+        self.assertEqual(2000, class_connectivity["total_weight"])
+        self.assertEqual(4.0, class_connectivity["average_weight"])
 
     def test_upstream_generate_solr_doc(self):
         result = {
@@ -119,26 +121,30 @@ class NeuronConnectivityIndexerUnitTest(unittest.TestCase):
         doc = indexer.generate_solr_doc(result, request=None)
 
         self.assertEqual("FBbt_00048514", doc["id"])
-        self.assertIn("upstream_connectivity", doc)
-        payload = json.loads(doc["upstream_connectivity"]["set"])
-        self.assertEqual("FBbt_00048514", payload["upstream"]["class_id"])
-        connections = payload["upstream"]["upstream_connections"]
-        self.assertEqual(1, len(connections))
-        conn = connections[0]
-        self.assertIn("upstream_class", conn)
-        self.assertIn("downstream_class", conn)
-        self.assertIn("pairwise_connections", conn)
-        self.assertIn("percent_connected", conn)
-        self.assertIn("total_weight", conn)
-        self.assertIn("average_weight", conn)
+        self.assertIn("upstream_connectivity_query", doc)
+        payload = json.loads(doc["upstream_connectivity_query"]["set"])
+        self.assertEqual(1, len(payload))
+        conn = payload[0]
+        self.assertEqual("upstream_class_connectivity_query", conn["query"])
+        self.assertEqual("FBbt_00048514", conn["term"]["core"]["short_form"])
+        self.assertEqual("projection neuron", conn["object"]["label"])
+        class_connectivity = conn["class_connectivity"]
+        self.assertEqual("projection neuron", class_connectivity["upstream_class"])
+        self.assertEqual("FBbt_00007382", class_connectivity["upstream_class_id"])
+        self.assertEqual("kenyon cell", class_connectivity["downstream_class"])
+        self.assertEqual("FBbt_00048514", class_connectivity["downstream_class_id"])
+        self.assertEqual(1000, class_connectivity["pairwise_connections"])
+        self.assertEqual(75.0, class_connectivity["percent_connected"])
+        self.assertEqual(5000, class_connectivity["total_weight"])
+        self.assertEqual(5.0, class_connectivity["average_weight"])
 
     # --- service names and batch size ---
 
     def test_downstream_service_name(self):
-        self.assertEqual("downstream_connectivity", NeuronDownstreamConnectivityIndexer().get_service_name())
+        self.assertEqual("downstream_connectivity_query", NeuronDownstreamConnectivityIndexer().get_service_name())
 
     def test_upstream_service_name(self):
-        self.assertEqual("upstream_connectivity", NeuronUpstreamConnectivityIndexer().get_service_name())
+        self.assertEqual("upstream_connectivity_query", NeuronUpstreamConnectivityIndexer().get_service_name())
 
     def test_downstream_batch_size_is_one(self):
         self.assertEqual(1, NeuronDownstreamConnectivityIndexer.REQUEST_BATCH_SIZE)
@@ -164,9 +170,13 @@ class NeuronConnectivityIndexerIntegrationTest(unittest.TestCase):
         self.assertIn("FBbt_00048514", solr_docs)
         doc = solr_docs["FBbt_00048514"]
         self.assertEqual("FBbt_00048514", doc["id"])
-        self.assertIn("downstream_connectivity", doc)
-        payload = json.loads(doc["downstream_connectivity"]["set"])
-        self.assertIn("downstream_connections", payload["downstream"])
+        self.assertIn("downstream_connectivity_query", doc)
+        payload = json.loads(doc["downstream_connectivity_query"]["set"])
+        self.assertIsInstance(payload, list)
+        self.assertTrue(payload)
+        self.assertIn("class_connectivity", payload[0])
+        self.assertIn("upstream_class", payload[0]["class_connectivity"])
+        self.assertIn("downstream_class", payload[0]["class_connectivity"])
 
     def test_upstream_crawling(self):
         solr_docs = NeuronUpstreamConnectivityIndexer().crawl_vfb_json_data(["FBbt_00048514"])
@@ -174,9 +184,13 @@ class NeuronConnectivityIndexerIntegrationTest(unittest.TestCase):
         self.assertIn("FBbt_00048514", solr_docs)
         doc = solr_docs["FBbt_00048514"]
         self.assertEqual("FBbt_00048514", doc["id"])
-        self.assertIn("upstream_connectivity", doc)
-        payload = json.loads(doc["upstream_connectivity"]["set"])
-        self.assertIn("upstream_connections", payload["upstream"])
+        self.assertIn("upstream_connectivity_query", doc)
+        payload = json.loads(doc["upstream_connectivity_query"]["set"])
+        self.assertIsInstance(payload, list)
+        self.assertTrue(payload)
+        self.assertIn("class_connectivity", payload[0])
+        self.assertIn("upstream_class", payload[0]["class_connectivity"])
+        self.assertIn("downstream_class", payload[0]["class_connectivity"])
 
 
 if __name__ == "__main__":
