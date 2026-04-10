@@ -165,6 +165,26 @@ def send_solr_docs(solr_docs: Sequence[Dict], service_name: str) -> bool:
         return True
 
     payload = json.dumps(docs)
+    payload_mb = len(payload) / (1024 * 1024)
+    if payload_mb > 1:
+        # Log individual doc sizes for large payloads to identify bloated documents.
+        for doc in docs:
+            doc_size = len(json.dumps(doc))
+            doc_id = doc.get("id", "?")
+            if doc_size > 1024 * 1024:  # > 1 MB
+                log.warning(
+                    f"Large document '{doc_id}' for service '{service_name}': "
+                    f"{doc_size / (1024 * 1024):.2f} MB"
+                )
+        log.warning(
+            f"Large payload for service '{service_name}': "
+            f"{payload_mb:.2f} MB, {len(docs)} doc(s)"
+        )
+    else:
+        log.debug(
+            f"Payload for service '{service_name}': "
+            f"{payload_mb:.2f} MB, {len(docs)} doc(s)"
+        )
     return send_solr_payload(payload, service_name=service_name, document_count=len(docs))
 
 
