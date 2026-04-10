@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from src.indexers.base_query_indexer import BaseQueryIndexer
 
@@ -19,6 +19,10 @@ class NeuronDownstreamConnectivityIndexer(BaseQueryIndexer):
 
     def get_service_name(self) -> str:
         return "downstream_connectivity_query"
+
+    def get_empty_result_json(self) -> Optional[str]:
+        # Consumers iterate a list of connection dicts; empty list = no connections.
+        return json.dumps([])
 
     def get_parameters_query(self) -> str:
         # Only return Class:Neuron parents that have at least one instance

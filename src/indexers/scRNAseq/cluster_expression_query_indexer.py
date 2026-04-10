@@ -1,5 +1,5 @@
 from src.indexers.base_query_indexer import BaseQueryIndexer
-from typing import List
+from typing import List, Optional
 
 
 class ClusterExpressionQueryIndexer(BaseQueryIndexer):
@@ -10,6 +10,10 @@ class ClusterExpressionQueryIndexer(BaseQueryIndexer):
         :return: name of the current service to index
         """
         return "cluster_expression"
+
+    def get_empty_result_json(self) -> Optional[str]:
+        # vfb_query.json has no required fields; empty dict = "no expression data for this cluster".
+        return "{}"
 
     def get_parameters_query(self) -> str:
         """

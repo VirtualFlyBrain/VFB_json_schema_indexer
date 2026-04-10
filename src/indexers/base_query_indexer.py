@@ -117,15 +117,21 @@ class BaseQueryIndexer(ABC):
             batch_data = self.process_exported_file(exported_file_path)
 
             # Cache empty results: if Neo4j returned nothing for some ids in
-            # this chunk, write an empty list to Solr so the id shows as
-            # "existing" on the next run rather than being re-queried forever.
+            # this chunk, write a schema-compliant empty value to Solr so the
+            # id shows as "existing" on the next run rather than being
+            # re-queried forever. The empty format is defined per-indexer via
+            # get_empty_result_json() — indexers that return None here signal
+            # "don't cache empties" (e.g. term_info, where every id must have
+            # a real result).
             service_name = self.get_service_name()
-            for doc_id in chunk:
-                if doc_id and doc_id not in batch_data:
-                    batch_data[doc_id] = {
-                        "id": doc_id,
-                        service_name: {"set": json.dumps([])}
-                    }
+            empty_json = self.get_empty_result_json()
+            if empty_json is not None:
+                for doc_id in chunk:
+                    if doc_id and doc_id not in batch_data:
+                        batch_data[doc_id] = {
+                            "id": doc_id,
+                            service_name: {"set": empty_json}
+                        }
 
             # Write batch_data to Solr
             self.write_to_solr(batch_data)
@@ -418,6 +424,37 @@ class BaseQueryIndexer(ABC):
         :return: name of the current service to index
         """
         pass
+
+    def get_empty_result_json(self) -> Optional[str]:
+        """Return the JSON string to cache in Solr for ids where the Neo4j
+        query returned no results. This prevents those ids from appearing as
+        "missing" on every future run.
+
+        The value MUST conform to the schema that consumers of this service
+        field expect. Override in each concrete indexer.
+
+        Return ``None`` to skip caching empty results for this service —
+        useful when every id is expected to have a real result (e.g.
+        term_info) and an empty one would indicate a bug, not normal
+        sparsity.
+
+        =====================================================================
+        Service                          | Empty format
+        =====================================================================
+        term_info                        | None  (always has results)
+        anat_query                       | None  (always has results)
+        anat_image_query                 | None  (always has results)
+        anat_2_ep_query                  | '{}'  (vfb_query.json, no required fields)
+        ep_2_anat_query                  | '{}'  (vfb_query.json, no required fields)
+        template_2_datasets_query        | None  (always has results)
+        all_datasets_query               | None  (always has results)
+        anat_scRNAseq                    | '{}'  (vfb_query.json, no required fields)
+        cluster_expression               | '{}'  (vfb_query.json, no required fields)
+        downstream_connectivity_query    | '[]'  (list of connection dicts)
+        upstream_connectivity_query      | '[]'  (list of connection dicts)
+        =====================================================================
+        """
+        return None
 
 
 class Neo4jQueryException(Exception):
