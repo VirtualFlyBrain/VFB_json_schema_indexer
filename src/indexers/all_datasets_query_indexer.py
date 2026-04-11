@@ -15,11 +15,14 @@ class AllDatasetsQueryIndexer(BaseQueryIndexer):
 
     def get_parameters_query(self) -> Optional[str]:
         """
-        Cypyher query to to list short forms of all nodes that can be passed as parameter to this service. Query should
-        return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
-        :return: Cypher query string
+        Returns None because the all_datasets_query Cypher already matches all
+        DataSet nodes internally (``MATCH (ds:DataSet)``).  It does not
+        reference the ``$ids`` parameter, so chunking template short-forms and
+        re-running the same expensive query per chunk is redundant and risks a
+        gateway timeout.  Returning None causes the base class to run the query
+        exactly once.
         """
-        return "MATCH (t:Template) WHERE (t)<-[:depicts]-(:Template) RETURN collect(distinct t.short_form) as ids"
+        return None
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
         """
