@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 from typing import Dict
 import concurrent.futures
 
@@ -24,6 +25,7 @@ from src.indexers.scRNAseq.cluster_expression_query_indexer import ClusterExpres
 from src.indexers.connectivity.neuron_downstream_connectivity_indexer import NeuronDownstreamConnectivityIndexer
 from src.indexers.connectivity.neuron_upstream_connectivity_indexer import NeuronUpstreamConnectivityIndexer
 from src.solr_client import send_solr_docs, send_solr_payload, send_final_commit
+from src.progress import ProgressTracker
 from tqdm import tqdm
 
 COMBINED_INDEX_CHUNK = int(os.getenv("COMBINED_INDEX_CHUNK", 5000))
@@ -70,6 +72,18 @@ def main() -> None:
     indexers = term_info_indexers + other_indexers
 
     all_data = dict()
+
+    # Progress tracker — persists state to $WORKSPACE/indexer_progress.json (or
+    # $PROGRESS_FILE) so a restarted job skips (phase, indexer) pairs that
+    # already completed. The pair that was in flight when the previous run
+    # died is reset to pending and re-runs; partition_ids() will re-probe Solr
+    # and naturally skip ids already written.
+    total_pairs = 2 * len(indexers)
+    tracker = ProgressTracker()
+    tracker.load()
+    tracker.set_total_pairs(total_pairs)
+    run_start = time.time()
+
     # Create a ThreadPoolExecutor for Solr updates
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         future_to_indexer = {}
@@ -78,16 +92,42 @@ def main() -> None:
         # then refresh STALE ones. If the job dies midway the site already has
         # first-time coverage across every service, rather than full coverage
         # for the first few services and nothing for the rest.
+        ordinal = 0
         for phase in ("missing", "stale"):
             log.info(f"=== Starting phase '{phase}' for all indexers ===")
             for indexer in indexers:
-                service_data = indexer.generate_index(phase=phase)
-                if not service_data:
+                ordinal += 1
+                indexer_name = type(indexer).__name__
+
+                if tracker.should_skip(phase, indexer_name):
+                    tracker.log_skip(phase, indexer_name, ordinal, total_pairs)
                     continue
+
+                tracker.mark_in_progress(phase, indexer_name, ordinal, total_pairs)
+                t0 = time.time()
+                try:
+                    service_data = indexer.generate_index(phase=phase)
+                except Exception as exc:
+                    tracker.mark_failed(
+                        phase, indexer_name, ordinal, total_pairs, exc,
+                        duration_seconds=time.time() - t0,
+                    )
+                    log.error('%r (phase=%s) crawl generated an exception: %s' % (indexer, phase, exc))
+                    raise
+
+                if not service_data:
+                    tracker.mark_empty(
+                        phase, indexer_name, ordinal, total_pairs,
+                        duration_seconds=time.time() - t0,
+                    )
+                    continue
+
                 prepare_for_atomic_update(service_data)
-                # Submit the Solr update task to the executor
+                # Submit the Solr update task to the executor. We mark the pair
+                # "completed" only after this future resolves — the crawl alone
+                # isn't a success if the combined_index write fails.
                 future = executor.submit(update_solr_with_data, service_data)
-                future_to_indexer[future] = (indexer, phase)
+                future_to_indexer[future] = (indexer, indexer_name, phase, ordinal, t0)
                 # Proceed to the next indexer without waiting for Solr update
                 merge_to_main_index(all_data, service_data)
 
@@ -96,13 +136,23 @@ def main() -> None:
 
         # Wait for all Solr updates to complete and handle exceptions
         for future in concurrent.futures.as_completed(future_to_indexer):
-            indexer, phase = future_to_indexer[future]
+            indexer, indexer_name, phase, ordinal, t0 = future_to_indexer[future]
+            duration = time.time() - t0
             try:
                 future.result()
             except Exception as exc:
+                tracker.mark_failed(
+                    phase, indexer_name, ordinal, total_pairs, exc,
+                    duration_seconds=duration,
+                )
                 log.error('%r (phase=%s) generated an exception: %s' % (indexer, phase, exc))
             else:
-                log.info('%r (phase=%s) Solr update completed successfully.' % (indexer, phase))
+                tracker.mark_completed(
+                    phase, indexer_name, ordinal, total_pairs,
+                    duration_seconds=duration,
+                )
+
+    tracker.finalize(total_elapsed_seconds=time.time() - run_start)
 
 
 def merge_to_main_index(all_data: Dict[str, Dict], service_data: Dict[str, Dict]) -> None:
