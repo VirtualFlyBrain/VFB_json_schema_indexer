@@ -17,7 +17,7 @@ class AnatImageQueryIndexer(BaseQueryIndexer):
         return 'ids' as result such as 'RETURN collect(distinct n.short_form) as ids'.
         :return: Cypher query string
         """
-        return "MATCH (n:has_image:Individual) RETURN collect(distinct n.short_form) as ids"
+        return "MATCH (n:has_image:Individual) WHERE NOT n.short_form starts with 'VFBc_' AND NOT n.short_form starts with 'FBlc' AND NOT n.short_form starts with 'SAMN' AND NOT n.short_form starts with 'VFB_internal' RETURN collect(distinct n.short_form) as ids"
         # return "MATCH (n:has_image:Individual) WITH distinct n LIMIT 4000 RETURN collect(distinct n.short_form) as ids"
 
     def get_vfb_json_query(self, ids: List[str]) -> str:
