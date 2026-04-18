@@ -1,0 +1,72 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Create Virtual Environment",
+            "type": "shell",
+            "command": "if [ ! -d '.venv' ]; then /opt/homebrew/bin/python3 -m venv .venv; fi",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "source .venv/bin/activate && python -m pip install -r requirements.txt && python -m pip install -e .",
+            "dependsOn": [
+                "Create Virtual Environment"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Install VFB Query Builder",
+            "type": "shell",
+            "command": "source .venv/bin/activate && rm -rf src/vfb/vfb_query_builder && mkdir -p src/vfb && git clone https://github.com/VirtualFlyBrain/VFB_json_schema.git src/vfb/vfb_query_builder && cd src/vfb/vfb_query_builder && pip install -e .",
+            "dependsOn": [
+                "Install Dependencies"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "source .venv/bin/activate && PYTHONPATH=${workspaceFolder} VISPY_GL=osmesa NAVIS_HEADLESS=1 python -m unittest discover",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "dependsOn": [
+                "Install VFB Query Builder"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests (Skip UI)",
+            "type": "shell",
+            "command": "source .venv/bin/activate && PYTHONPATH=${workspaceFolder} python -m unittest discover -k 'not test_anat_image_crawling and not test_crawling'",
+            "group": "test",
+            "dependsOn": [
+                "Install VFB Query Builder"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

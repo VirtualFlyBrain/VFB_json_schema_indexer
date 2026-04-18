@@ -1,5 +1,8 @@
 import os
 import unittest
+from unittest.mock import MagicMock, patch
+import json
+
 from src.indexers.term_info.license_term_info_indexer import LicenseTermInfoQueryIndexer
 from src.indexers.term_info.anatomical_ind_term_info_indexer import AnatomicalIndTermInfoQueryIndexer
 from src.indexers.term_info.class_term_info_indexer import ClassTermInfoQueryIndexer
@@ -8,6 +11,7 @@ from src.indexers.term_info.split_class_term_info_indexer import SplitClassTermI
 from src.indexers.term_info.dataset_term_info_indexer import DatasetTermInfoQueryIndexer
 from src.indexers.term_info.pub_term_info_indexer import PubTermInfoQueryIndexer
 from src.indexers.term_info.template_term_info_indexer import TemplateTermInfoQueryIndexer
+from src.indexers.term_info.cluster_term_info_indexer import ClusterTermInfoQueryIndexer
 
 
 TEST_SERVICE_NAME = "test_query"
@@ -135,5 +139,69 @@ class TemplateGenerationTest(unittest.TestCase):
         self.assertTrue("VFB_00110000" in solr_docs)
         self.assertEqual("VFB_00110000", solr_docs["VFB_00110000"]["id"])
         self.assertTrue("term_info" in solr_docs["VFB_00110000"])
+
+
+class ClusterTermInfoIndexerTest(unittest.TestCase):
+
+    @patch('src.indexers.base_query_indexer.Neo4jConnect')
+    def test_get_parameters_query(self, mock_neo4j):
+        # Arrange
+        mock_instance = mock_neo4j.return_value
+        indexer = ClusterTermInfoQueryIndexer()
+        
+        # Act
+        query = indexer.get_parameters_query()
+        
+        # Assert
+        self.assertTrue("MATCH (i:Individual:Cluster)" in query)
+        self.assertTrue("RETURN collect(distinct i.short_form)" in query)
+
+    @patch('src.indexers.base_query_indexer.Neo4jConnect')
+    def test_get_vfb_json_query(self, mock_neo4j):
+        # Arrange
+        mock_instance = mock_neo4j.return_value
+        indexer = ClusterTermInfoQueryIndexer()
+        
+        # Act
+        query = indexer.get_vfb_json_query(["FBlc0007111"])
+        
+        # Assert
+        self.assertTrue("MATCH (primary:Cluster)" in query)
+        self.assertTrue("WHERE primary.short_form in $ids" in query)
+        self.assertTrue("term" in query)
+
+    @patch('src.indexers.base_query_indexer.Neo4jConnect')
+    def test_generate_solr_doc(self, mock_neo4j):
+        # Arrange
+        mock_instance = mock_neo4j.return_value
+        indexer = ClusterTermInfoQueryIndexer()
+        
+        result = {
+            "term": {
+                "core": {
+                    "short_form": "FBlc0007111",
+                    "label": "Test Cluster",
+                    "iri": "http://test.org/FBlc0007111",
+                    "types": ["Entity", "Individual", "Cluster"]
+                },
+                "description": ["Test description"],
+                "comment": ["Test comment"]
+            },
+            "dataset_license": [],
+            "parents": [],
+            "relationships": [],
+            "xrefs": [],
+            "channel_image": []
+        }
+        
+        # Act
+        solr_doc = indexer.generate_solr_doc(result)
+        
+        # Assert
+        self.assertEqual("FBlc0007111", solr_doc["id"])
+        self.assertEqual(result, solr_doc["term_info"][0])
+
+if __name__ == '__main__':
+    unittest.main()
 
 

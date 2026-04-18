@@ -1,5 +1,5 @@
 from src.indexers.base_query_indexer import BaseQueryIndexer
-from typing import List
+from typing import List, Optional
 
 
 class Anat2EpQueryIndexer(BaseQueryIndexer):
@@ -12,6 +12,10 @@ class Anat2EpQueryIndexer(BaseQueryIndexer):
         :return: name of the current service to index
         """
         return "anat_2_ep_query"
+
+    def get_empty_result_json(self) -> Optional[str]:
+        # vfb_query.json has no required fields; empty dict = "no expression patterns for this anatomy".
+        return "{}"
 
     def get_parameters_query(self) -> str:
         """

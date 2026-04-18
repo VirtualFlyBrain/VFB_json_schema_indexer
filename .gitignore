@@ -1,1 +1,4 @@
 /src/vfb/
+src/.DS_Store
+*.pyc
+vfb_json_schema_indexer.egg-info
