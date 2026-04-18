@@ -10,6 +10,7 @@ from src.indexers.anat_query_indexer import AnatQueryIndexer
 from src.indexers.anat_2_ep_query_indexer import Anat2EpQueryIndexer
 from src.indexers.ep_2_anat_query_indexer import Ep2AnatQueryIndexer
 from src.indexers.template_2_datasets_query_indexer import Template2DatasetsQueryIndexer
+from src.indexers.template_2_roi_browser_query_indexer import Template2ROIbrowserQueryIndexer
 from src.indexers.all_datasets_query_indexer import AllDatasetsQueryIndexer
 from src.indexers.term_info.license_term_info_indexer import LicenseTermInfoQueryIndexer
 from src.indexers.term_info.anatomical_ind_term_info_indexer import AnatomicalIndTermInfoQueryIndexer
@@ -61,6 +62,7 @@ def main() -> None:
         Anat2EpQueryIndexer(),
         Ep2AnatQueryIndexer(),
         Template2DatasetsQueryIndexer(),
+        Template2ROIbrowserQueryIndexer(),
         AllDatasetsQueryIndexer(),
         AnatScRNASeqQueryIndexer(),
         ClusterExpressionQueryIndexer(),
