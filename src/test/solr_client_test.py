@@ -13,9 +13,10 @@ class SolrClientTest(unittest.TestCase):
         os.environ["SOLRserver"] = "http://solr-test.virtualflybrain.org/solr"
         os.environ["SOLRcollection"] = "vfb_json"
 
+    @patch("src.solr_client._wait_for_solr", return_value=True)
     @patch("src.solr_client.time.sleep")
-    @patch("src.solr_client.requests.post")
-    def test_send_solr_docs_retries_after_connection_error(self, mock_post, mock_sleep):
+    @patch.object(solr_client._SESSION, "post")
+    def test_send_solr_docs_retries_after_connection_error(self, mock_post, mock_sleep, mock_wait):
         response = Mock()
         response.raise_for_status.return_value = None
         response.text = '{"status":"ok"}'
@@ -25,9 +26,9 @@ class SolrClientTest(unittest.TestCase):
             response,
         ]
 
-        with patch.object(solr_client, "SOLR_WRITE_MAX_RETRIES", 1), \
-                patch.object(solr_client, "SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS", 0), \
-                patch.object(solr_client, "SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS", 0):
+        with patch.object(solr_client, "SOLR_MAX_RETRY_WAIT_SECONDS", 60), \
+                patch.object(solr_client, "SOLR_RETRY_INITIAL_DELAY_SECONDS", 0), \
+                patch.object(solr_client, "SOLR_RETRY_MAX_DELAY_SECONDS", 0):
             result = solr_client.send_solr_docs(
                 [{"id": "test_id", "term_info": {"set": '{"value": 1}'}}],
                 service_name="term_info",
@@ -35,16 +36,17 @@ class SolrClientTest(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(2, mock_post.call_count)
-        mock_sleep.assert_called_once_with(0)
+        mock_wait.assert_called_once()
+        # backoff is 0 so time.sleep should not be invoked.
+        mock_sleep.assert_not_called()
 
+    @patch("src.solr_client._wait_for_solr", return_value=False)
     @patch("src.solr_client.time.sleep")
-    @patch("src.solr_client.requests.post")
-    def test_send_solr_docs_returns_false_after_exhausting_retries(self, mock_post, mock_sleep):
+    @patch.object(solr_client._SESSION, "post")
+    def test_send_solr_docs_returns_false_when_solr_never_returns(self, mock_post, mock_sleep, mock_wait):
         mock_post.side_effect = requests.exceptions.ConnectionError("connection dropped")
 
-        with patch.object(solr_client, "SOLR_WRITE_MAX_RETRIES", 1), \
-                patch.object(solr_client, "SOLR_WRITE_RETRY_INITIAL_DELAY_SECONDS", 0), \
-                patch.object(solr_client, "SOLR_WRITE_RETRY_DELAY_INCREMENT_SECONDS", 0), \
+        with patch.object(solr_client, "SOLR_MAX_RETRY_WAIT_SECONDS", 60), \
                 self.assertLogs("src.solr_client", level="ERROR") as captured_logs:
             result = solr_client.send_solr_docs(
                 [{"id": "test_id", "term_info": {"set": '{"value": 1}'}}],
@@ -52,11 +54,12 @@ class SolrClientTest(unittest.TestCase):
             )
 
         self.assertFalse(result)
-        self.assertEqual(2, mock_post.call_count)
-        self.assertEqual(1, mock_sleep.call_count)
-        self.assertTrue(any("Giving up indexing" in message for message in captured_logs.output))
+        self.assertEqual(1, mock_post.call_count)
+        mock_wait.assert_called_once()
+        mock_sleep.assert_not_called()
+        self.assertTrue(any("did not become available" in message for message in captured_logs.output))
 
-    @patch("src.solr_client.requests.post")
+    @patch.object(solr_client._SESSION, "post")
     def test_send_solr_docs_skips_empty_batches(self, mock_post):
         result = solr_client.send_solr_docs([], service_name="term_info")
 
