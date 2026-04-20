@@ -4,7 +4,7 @@ import json
 import logging
 import datetime
 import time
-from typing import List, Dict, Generator, Optional, Tuple
+from typing import Iterable, List, Dict, Generator, Optional, Set, Tuple
 from abc import ABC, abstractmethod
 
 import requests
@@ -21,6 +21,68 @@ NEO4J_MAX_RETRY_WAIT_SECONDS = int(os.getenv("NEO4J_MAX_RETRY_WAIT_SECONDS", 120
 NEO4J_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("NEO4J_RETRY_INITIAL_DELAY_SECONDS", 5))
 NEO4J_RETRY_MAX_DELAY_SECONDS = int(os.getenv("NEO4J_RETRY_MAX_DELAY_SECONDS", 120))
 NEO4J_HEALTH_CHECK_INTERVAL = 30  # seconds between pings
+
+CHECKPOINT_DIR_ENV = "CHECKPOINT_DIR"
+CHECKPOINT_SUBDIR = "indexer_checkpoints"
+
+
+def _resolve_checkpoint_dir() -> str:
+    """Pick a directory for per-(phase, indexer) completed-id checkpoints.
+
+    Resolution order mirrors src/progress.py so all resume artefacts live
+    alongside each other: explicit env override, then the directory of
+    ``$PROGRESS_FILE``, then ``$WORKSPACE``, then CWD.
+    """
+    explicit = os.environ.get(CHECKPOINT_DIR_ENV)
+    if explicit:
+        return explicit
+    progress_file = os.environ.get("PROGRESS_FILE")
+    if progress_file:
+        return os.path.join(
+            os.path.dirname(os.path.abspath(progress_file)), CHECKPOINT_SUBDIR
+        )
+    workspace = os.environ.get("WORKSPACE")
+    if workspace:
+        return os.path.join(workspace, CHECKPOINT_SUBDIR)
+    return os.path.join(os.getcwd(), CHECKPOINT_SUBDIR)
+
+
+def _checkpoint_path_for(phase: str, indexer_name: str) -> str:
+    safe_phase = phase.replace(os.sep, "_")
+    safe_name = indexer_name.replace(os.sep, "_")
+    return os.path.join(_resolve_checkpoint_dir(), f"{safe_phase}__{safe_name}.ids")
+
+
+def _load_checkpoint(path: str) -> Set[str]:
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return {line.strip() for line in f if line.strip()}
+    except OSError as e:
+        log.warning(f"Checkpoint file unreadable at {path}: {e}. Starting fresh.")
+        return set()
+
+
+def _append_checkpoint(path: str, ids: Iterable[str]) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for doc_id in ids:
+                if doc_id:
+                    f.write(f"{doc_id}\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as e:
+        log.warning(f"Could not append to checkpoint file {path}: {e}")
+
+
+def _clear_checkpoint(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        log.warning(f"Could not remove checkpoint file {path}: {e}")
 
 
 class BaseQueryIndexer(ABC):
@@ -80,14 +142,44 @@ class BaseQueryIndexer(ABC):
             )
             return {}
 
-        return self.crawl_vfb_json_data(ids)
+        return self.crawl_vfb_json_data(ids, phase=phase)
 
-    def crawl_vfb_json_data(self, ids: List[str]) -> Dict[str, Dict]:
+    def crawl_vfb_json_data(self, ids: List[str], phase: str = "all") -> Dict[str, Dict]:
+        service_name = self.get_service_name()
+        indexer_name = self.__class__.__name__
+
+        # Sort ids so chunking is deterministic across runs — essential for the
+        # checkpoint-based resume below, and makes the "Exported data For X to Y"
+        # log lines a readable monotonic range.
+        ids = sorted(ids)
+
+        # Per-(phase, indexer) checkpoint: every successfully written batch's ids
+        # are appended to a file so a restarted run skips them instead of
+        # re-crawling. `partition_ids()` already handles this naturally for the
+        # missing phase (docs written mid-crash now show as existing), but the
+        # stale phase has no such signal — without this checkpoint a crash at
+        # batch 199/316 means the next run re-does batches 0..198, hits the same
+        # memory/timeout wall, and never makes forward progress.
+        checkpoint_path = _checkpoint_path_for(phase, indexer_name)
+        completed_ids = _load_checkpoint(checkpoint_path)
+        if completed_ids:
+            original_count = len(ids)
+            ids = [i for i in ids if i not in completed_ids]
+            log.info(
+                f"{service_name}: resuming from checkpoint {checkpoint_path} — "
+                f"skipping {original_count - len(ids)} already-processed ids, "
+                f"{len(ids)} remaining."
+            )
+
         start_time = datetime.datetime.now()
         batch_size = self.REQUEST_BATCH_SIZE
-        service_name = self.get_service_name()
-        log.info(f"Crawling: '{service_name}' ({self.__class__.__name__}), "
+        log.info(f"Crawling: '{service_name}' ({indexer_name}), "
                  f"Batch size: {batch_size}, ids: {len(ids)}, Start time: {start_time}")
+
+        if not ids:
+            log.info(f"{service_name}: nothing to crawl after checkpoint filter.")
+            _clear_checkpoint(checkpoint_path)
+            return {}
 
         chunks = get_chunks(ids, batch_size)
         vfb_json_query_template = self.get_vfb_json_query(['$ID'])
@@ -136,6 +228,12 @@ class BaseQueryIndexer(ABC):
             # Write batch_data to Solr
             self.write_to_solr(batch_data)
 
+            # Record the chunk as complete so a crash-and-restart skips it.
+            # We record the *requested* chunk ids (not just batch_data keys) so
+            # that ids with empty Neo4j results — or cached-empty ids written
+            # above — are also treated as done and never re-requested.
+            _append_checkpoint(checkpoint_path, chunk)
+
             # Update the all_data dictionary with the batch data
             all_data.update(batch_data)
 
@@ -146,6 +244,11 @@ class BaseQueryIndexer(ABC):
         # been POSTed. Individual batches use commitWithin (see solr_client.py)
         # so we avoid thousands of per-batch Lucene flushes.
         send_final_commit(self.get_service_name())
+
+        # All batches succeeded and the final commit is in — the checkpoint has
+        # served its purpose. Remove it so the next run for this (phase, indexer)
+        # pair starts clean (otherwise `partition_ids()` would skip everything).
+        _clear_checkpoint(checkpoint_path)
 
         end_time = datetime.datetime.now()
         diff = end_time - start_time
