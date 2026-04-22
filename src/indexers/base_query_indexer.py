@@ -95,7 +95,19 @@ class BaseQueryIndexer(ABC):
     def __init__(self) -> None:
         self.ql = QueryLibrary()
         self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
+        # Shared Session so the HAProxy `sticky=<backend>` cookie persists
+        # across retries — once a request lands on a healthy pdb.ug backend
+        # the LB keeps us pinned there instead of round-robining every call.
+        # On failure we clear cookies (see _drop_backend_affinity) so the LB
+        # reassigns us away from a sick pod.
+        self._session = requests.Session()
         self._id_partition: Optional[Tuple[List[str], List[str]]] = None
+
+    def _drop_backend_affinity(self) -> None:
+        """Forget the HAProxy sticky cookie so the next request is re-routed.
+        Called whenever a request fails: the pod we were pinned to is likely
+        unhealthy, so the next retry should pick a different backend."""
+        self._session.cookies.clear()
 
     def partition_ids(self) -> Tuple[List[str], List[str]]:
         """Partition this indexer's parameter ids into (missing, stale) by
@@ -322,7 +334,7 @@ class BaseQueryIndexer(ABC):
             if remaining <= 0:
                 return False
             try:
-                r = requests.post(
+                r = self._session.post(
                     url=url,
                     auth=(self.nc.usr, self.nc.pwd),
                     data=ping_payload,
@@ -332,8 +344,11 @@ class BaseQueryIndexer(ABC):
                 if r.status_code == 200:
                     return True
                 log.info(f"Neo4j ping returned {r.status_code}, waiting...")
+                # Pinned backend responded unhealthy — drop affinity so the
+                # next ping is routed to a different pod.
+                self._drop_backend_affinity()
             except requests.exceptions.RequestException:
-                pass
+                self._drop_backend_affinity()
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -380,7 +395,7 @@ class BaseQueryIndexer(ABC):
 
         while True:
             try:
-                response = requests.post(
+                response = self._session.post(
                     url=f"{self.nc.base_uri}{self.nc.commit}",
                     auth=(self.nc.usr, self.nc.pwd),
                     data=payload,
@@ -396,6 +411,7 @@ class BaseQueryIndexer(ABC):
             except requests.exceptions.RequestException as e:
                 attempt += 1
                 log.warning(str(e))
+                self._drop_backend_affinity()
 
                 if retry_deadline is None:
                     retry_deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
@@ -449,7 +465,7 @@ class BaseQueryIndexer(ABC):
 
         while True:
             try:
-                response = requests.post(
+                response = self._session.post(
                     url=f"{self.nc.base_uri}{self.nc.commit}",
                     auth=(self.nc.usr, self.nc.pwd),
                     data=payload,
@@ -472,6 +488,7 @@ class BaseQueryIndexer(ABC):
             except requests.exceptions.RequestException as e:
                 attempt += 1
                 log.warning(str(e))
+                self._drop_backend_affinity()
 
                 if retry_deadline is None:
                     retry_deadline = time.time() + NEO4J_MAX_RETRY_WAIT_SECONDS
