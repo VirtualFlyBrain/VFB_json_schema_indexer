@@ -91,7 +91,15 @@ class BaseQueryIndexer(ABC):
     Crawls a VFB_json_schema service with all possible parameters and generates related Solr indexes.
     """
 
-    REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 2000))
+    # 2000 ids/chunk was overwhelming Neo4j (apoc.export.json OOMing on the
+    # term_info query) and producing 13–20 MB Solr payloads that tripped the
+    # "Large payload" warning every single batch. 500 keeps each chunk at
+    # ~4 MB, gives apoc.export a 4× smaller working set, and still amortises
+    # HTTP overhead across plenty of ids per request. A pathological single
+    # id that still OOMs at this size is now handled by the split-in-half
+    # retry logic in _process_chunk rather than bricking the whole crawl.
+    # Overridable via BATCH_SIZE env var for ad-hoc tuning.
+    REQUEST_BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
     def __init__(self) -> None:
         self.ql = QueryLibrary()
         self.nc = Neo4jConnect(os.environ["PDBserver"], os.environ["PDBuser"], os.environ["PDBpassword"])
@@ -173,6 +181,12 @@ class BaseQueryIndexer(ABC):
         # batch 199/316 means the next run re-does batches 0..198, hits the same
         # memory/timeout wall, and never makes forward progress.
         checkpoint_path = _checkpoint_path_for(phase, indexer_name)
+        # Log the resolved path on every run so operators can see *where*
+        # checkpoints are being written — crucial on Jenkins, where the
+        # default under $WORKSPACE gets wiped between builds. Set
+        # $CHECKPOINT_DIR to somewhere persistent (e.g. /var/jenkins_home/
+        # indexer_checkpoints) to actually get resume-across-runs.
+        log.info(f"{service_name}: checkpoint path = {checkpoint_path}")
         completed_ids = _load_checkpoint(checkpoint_path)
         if completed_ids:
             original_count = len(ids)
@@ -201,56 +215,18 @@ class BaseQueryIndexer(ABC):
 
         all_data = {}  # Initialize the dictionary to collect Solr documents
 
+        vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
+
         for i, chunk in enumerate(tqdm(chunks, total=int(math.ceil(len(ids) / batch_size)), desc=self.get_service_name())):
-            # Prepare the query
-            vfb_json_query = vfb_json_query_template.replace("['$ID']", "$ids")
-
-            # Set the output file path
-            output_filename = f"output_{i}.json"
-            output_file_path = f"file://{neo4j_import_dir}/{output_filename}"
-
-            # Execute the query and export to file
-            self.execute_query(vfb_json_query, params={'ids': chunk}, output_file=output_file_path)
-
-            # Wait for the file to be written
-            exported_file_path = os.path.join(jenkins_import_dir, output_filename)
-            while not os.path.exists(exported_file_path):
-                time.sleep(1)  # Wait for 1 second before checking again
-
-            # Process the file and collect the data
-            batch_data = self.process_exported_file(exported_file_path)
-
-            # Cache empty results: if Neo4j returned nothing for some ids in
-            # this chunk, write a schema-compliant empty value to Solr so the
-            # id shows as "existing" on the next run rather than being
-            # re-queried forever. The empty format is defined per-indexer via
-            # get_empty_result_json() — indexers that return None here signal
-            # "don't cache empties" (e.g. term_info, where every id must have
-            # a real result).
-            service_name = self.get_service_name()
-            empty_json = self.get_empty_result_json()
-            if empty_json is not None:
-                for doc_id in chunk:
-                    if doc_id and doc_id not in batch_data:
-                        batch_data[doc_id] = {
-                            "id": doc_id,
-                            service_name: {"set": empty_json}
-                        }
-
-            # Write batch_data to Solr
-            self.write_to_solr(batch_data)
-
-            # Record the chunk as complete so a crash-and-restart skips it.
-            # We record the *requested* chunk ids (not just batch_data keys) so
-            # that ids with empty Neo4j results — or cached-empty ids written
-            # above — are also treated as done and never re-requested.
-            _append_checkpoint(checkpoint_path, chunk)
-
-            # Update the all_data dictionary with the batch data
-            all_data.update(batch_data)
-
-            # Remove the file after processing
-            os.remove(exported_file_path)
+            self._process_chunk(
+                chunk=chunk,
+                label=str(i),
+                vfb_json_query=vfb_json_query,
+                neo4j_import_dir=neo4j_import_dir,
+                jenkins_import_dir=jenkins_import_dir,
+                checkpoint_path=checkpoint_path,
+                all_data=all_data,
+            )
 
         # Issue a single hard commit for this service now that all batches have
         # been POSTed. Individual batches use commitWithin (see solr_client.py)
@@ -267,6 +243,100 @@ class BaseQueryIndexer(ABC):
         log.info(f"All data crawled and indexed in {diff.total_seconds() / 60.0} minutes")
 
         return all_data  # Return the combined dictionary
+
+    def _process_chunk(
+        self,
+        chunk: List[str],
+        label: str,
+        vfb_json_query: str,
+        neo4j_import_dir: str,
+        jenkins_import_dir: str,
+        checkpoint_path: str,
+        all_data: Dict[str, Dict],
+    ) -> None:
+        """Run one chunk of ids through Neo4j → export file → Solr, updating
+        the checkpoint on success.
+
+        If ``execute_query`` exhausts its own retry budget (``Neo4jQueryException``)
+        — typically because a single id in the chunk produces a result so
+        large that apoc.export OOMs or the gateway times out — split the
+        chunk in half and recurse. This isolates the heavy id(s) to a
+        progressively smaller sub-chunk while the rest of the batch still
+        gets indexed. Down to a single id we give up and re-raise, since
+        there's nothing left to split.
+
+        The per-sub-chunk label (``"7"`` → ``"7a"``, ``"7b"``, ``"7aa"`` …)
+        keeps the export filenames unique so two recursive branches can't
+        clobber each other's output.
+        """
+        output_filename = f"output_{label}.json"
+        output_file_path = f"file://{neo4j_import_dir}/{output_filename}"
+        exported_file_path = os.path.join(jenkins_import_dir, output_filename)
+
+        try:
+            self.execute_query(
+                vfb_json_query, params={'ids': chunk}, output_file=output_file_path
+            )
+        except Neo4jQueryException as e:
+            if len(chunk) <= 1:
+                log.error(
+                    f"{self.get_service_name()}: chunk '{label}' with single id "
+                    f"{chunk!r} failed even after retries — giving up on it."
+                )
+                raise
+            mid = len(chunk) // 2
+            log.warning(
+                f"{self.get_service_name()}: chunk '{label}' of {len(chunk)} ids "
+                f"failed ({e}) — splitting in half to isolate heavy id(s) and retrying."
+            )
+            self._process_chunk(
+                chunk[:mid], f"{label}a", vfb_json_query,
+                neo4j_import_dir, jenkins_import_dir, checkpoint_path, all_data,
+            )
+            self._process_chunk(
+                chunk[mid:], f"{label}b", vfb_json_query,
+                neo4j_import_dir, jenkins_import_dir, checkpoint_path, all_data,
+            )
+            return
+
+        # Wait for the file to be written
+        while not os.path.exists(exported_file_path):
+            time.sleep(1)
+
+        # Process the file and collect the data
+        batch_data = self.process_exported_file(exported_file_path)
+
+        # Cache empty results: if Neo4j returned nothing for some ids in
+        # this chunk, write a schema-compliant empty value to Solr so the
+        # id shows as "existing" on the next run rather than being
+        # re-queried forever. The empty format is defined per-indexer via
+        # get_empty_result_json() — indexers that return None here signal
+        # "don't cache empties" (e.g. term_info, where every id must have
+        # a real result).
+        service_name = self.get_service_name()
+        empty_json = self.get_empty_result_json()
+        if empty_json is not None:
+            for doc_id in chunk:
+                if doc_id and doc_id not in batch_data:
+                    batch_data[doc_id] = {
+                        "id": doc_id,
+                        service_name: {"set": empty_json}
+                    }
+
+        # Write batch_data to Solr
+        self.write_to_solr(batch_data)
+
+        # Record the chunk as complete so a crash-and-restart skips it.
+        # We record the *requested* chunk ids (not just batch_data keys) so
+        # that ids with empty Neo4j results — or cached-empty ids written
+        # above — are also treated as done and never re-requested.
+        _append_checkpoint(checkpoint_path, chunk)
+
+        # Update the all_data dictionary with the batch data
+        all_data.update(batch_data)
+
+        # Remove the file after processing
+        os.remove(exported_file_path)
 
     def process_exported_file(self, file_path: str) -> Dict[str, Dict]:
         """
