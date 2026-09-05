@@ -73,6 +73,29 @@ def main() -> None:
     # Combine the indexers
     indexers = term_info_indexers + other_indexers
 
+    # The MISSING phase runs the term_info indexers smallest population first
+    # (License, Template, Pub, DataSet ... AnatomicalInd), the opposite of the
+    # stale order above. Missing work is a handful of new records per type,
+    # and a new DataSet or Template is what users hit first: it is listed
+    # under All Datasets by the query-result indexers within minutes but shows
+    # a blank term info until this pair writes its document. Putting the big
+    # populations (3,558 anatomical individuals on 2026-09-04) ahead of the
+    # eight datasets means an early abort leaves the visible gap and fixes
+    # the invisible one.
+    by_type = {type(i): i for i in term_info_indexers}
+    missing_phase_indexers = [by_type[t] for t in (
+        LicenseTermInfoQueryIndexer,
+        TemplateTermInfoQueryIndexer,
+        PubTermInfoQueryIndexer,
+        DatasetTermInfoQueryIndexer,
+        ClusterTermInfoQueryIndexer,
+        SplitClassTermInfoQueryIndexer,
+        NeuronClassTermInfoQueryIndexer,
+        ClassTermInfoQueryIndexer,
+        AnatomicalIndTermInfoQueryIndexer,
+    )] + other_indexers
+    assert len(missing_phase_indexers) == len(indexers)
+
     all_data = dict()
 
     # Progress tracker — persists state to $WORKSPACE/indexer_progress.json (or
@@ -97,7 +120,7 @@ def main() -> None:
         ordinal = 0
         for phase in ("missing", "stale"):
             log.info(f"=== Starting phase '{phase}' for all indexers ===")
-            for indexer in indexers:
+            for indexer in (missing_phase_indexers if phase == "missing" else indexers):
                 ordinal += 1
                 indexer_name = type(indexer).__name__
 

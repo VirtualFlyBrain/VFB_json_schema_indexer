@@ -130,8 +130,9 @@ class ProgressTracker:
         # If the previous run finished cleanly, tell the user how to force a re-run.
         if loaded.get("run_status") == RUN_COMPLETED:
             log.info(
-                "[progress] previous run completed successfully — all pairs will be skipped. "
-                "Set PROGRESS_RESET=1 (or delete the progress file) to force a fresh run."
+                "[progress] previous run completed successfully — stale pairs will be skipped "
+                "(missing pairs always re-run). Set PROGRESS_RESET=1 (or delete the progress "
+                "file) to force a fresh run."
             )
 
         # Previous run may have been mid-flight: reset any in-progress pairs to pending
@@ -141,6 +142,22 @@ class ProgressTracker:
         for key, pair in pairs.items():
             if pair.get("status") == STATUS_IN_PROGRESS:
                 log.info(f"[progress] resuming — resetting interrupted pair {key} to pending")
+                pair["status"] = STATUS_PENDING
+                pair["error"] = None
+
+        # A completed MISSING pair is never carried over. "Missing" is decided
+        # against Solr at the start of the pair (partition_ids), so re-running
+        # it costs one probe plus only the ids that actually lack a document —
+        # cheap — while skipping it means anything that reached the PDB after
+        # the earlier build's probe stays invisible until the (multi-day)
+        # STALE crawl for that indexer comes round. Build #71 skipped every
+        # term_info indexer's missing phase on an earlier build's word, then
+        # spent 30 h in stale AnatomicalInd; Berg2025a/Bates2026, added in
+        # between, sat under All Datasets with a blank term info the whole time.
+        # Only STALE pairs, which are the expensive ones, are resumable.
+        for key, pair in pairs.items():
+            if pair.get("phase") == "missing" and pair.get("status") in (STATUS_COMPLETED, STATUS_EMPTY):
+                log.info(f"[progress] resuming — missing-phase pair {key} re-runs (never skipped across runs)")
                 pair["status"] = STATUS_PENDING
                 pair["error"] = None
 
