@@ -1,6 +1,6 @@
 FROM python:3.8
 
-ENV PDBserver=http://pdb.v4.virtualflybrain.org
+ENV PDBserver=https://pdb.virtualflybrain.org
 ENV PDBuser=user
 ENV PDBpassword=password
 ENV OutputPath=./indexes/solr_index.json
