@@ -4,13 +4,14 @@ import json
 import logging
 import datetime
 import time
+import threading
 from typing import Iterable, List, Dict, Generator, Optional, Set, Tuple
 from abc import ABC, abstractmethod
 
 import requests
 from vfb_connect.neo.neo4j_tools import Neo4jConnect, dict_cursor
 from src.vfb.vfb_query_builder.query_roller import QueryLibrary
-from src.solr_client import send_solr_docs, send_final_commit, fetch_ids_with_field
+from src.solr_client import send_solr_docs, send_final_commit, fetch_ids_with_field, fetch_field_values
 from tqdm import tqdm
 from socket import error as SocketError
 
@@ -83,6 +84,51 @@ def _clear_checkpoint(path: str) -> None:
             os.remove(path)
     except OSError as e:
         log.warning(f"Could not remove checkpoint file {path}: {e}")
+
+
+# EXPORT_MODE=stream only: seconds APOC keeps polling one batch's export before giving up. A single slow
+# term (e.g. a large template's ROI/dataset tree on a busy server) can need more than the old fixed 7200.
+EXPORT_STREAM_TIMEOUT_SECONDS = int(os.getenv("EXPORT_STREAM_TIMEOUT", "7200"))
+
+# CHANGED_IDS_FILE: append "<service>\t<id>" for every document this run writes with a different value from the
+# one already in Solr (and every newly added one), so a release can refresh downstream caches for just those ids.
+# SKIP_UNCHANGED=true additionally leaves unchanged documents unwritten (less Solr churn on a stale refresh).
+CHANGED_IDS_FILE = os.getenv("CHANGED_IDS_FILE", "")
+SKIP_UNCHANGED = os.getenv("SKIP_UNCHANGED", "false").lower() in ("1", "true", "yes")
+_changed_ids_lock = threading.Lock()
+
+
+def _record_changes(service_name: str, phase: str, batch_data: Dict[str, Dict]) -> Dict[str, Dict]:
+    """Note which docs in *batch_data* differ from Solr; return the docs to write.
+
+    Missing-phase docs are new by definition. For any other phase the current
+    values are read back from Solr; if that read fails every doc counts as
+    changed (a spare cache refresh is cheap, a missed one is not).
+    """
+    if not CHANGED_IDS_FILE and not SKIP_UNCHANGED:
+        return batch_data
+    if phase == "missing":
+        changed = list(batch_data)
+    else:
+        current = fetch_field_values(list(batch_data), service_name)
+        if current is None:
+            changed = list(batch_data)
+        else:
+            changed = [i for i, doc in batch_data.items()
+                       if current.get(i) != doc.get(service_name, {}).get("set")]
+    if CHANGED_IDS_FILE and changed:
+        try:
+            with _changed_ids_lock:
+                os.makedirs(os.path.dirname(CHANGED_IDS_FILE) or ".", exist_ok=True)
+                with open(CHANGED_IDS_FILE, "a", encoding="utf-8") as f:
+                    for doc_id in changed:
+                        f.write(f"{service_name}\t{doc_id}\n")
+        except OSError as e:
+            log.warning(f"Could not append to CHANGED_IDS_FILE {CHANGED_IDS_FILE}: {e}")
+    if SKIP_UNCHANGED:
+        keep = set(changed)
+        return {i: d for i, d in batch_data.items() if i in keep}
+    return batch_data
 
 
 class BaseQueryIndexer(ABC):
@@ -240,8 +286,10 @@ class BaseQueryIndexer(ABC):
                             service_name: {"set": empty_json}
                         }
 
-            # Write batch_data to Solr
-            self.write_to_solr(batch_data)
+            # Write batch_data to Solr (only what changed, with SKIP_UNCHANGED; changes noted in CHANGED_IDS_FILE)
+            to_write = _record_changes(service_name, phase, batch_data)
+            if to_write:
+                self.write_to_solr(to_write)
 
             # Record the chunk as complete so a crash-and-restart skips it.
             # We record the *requested* chunk ids (not just batch_data keys) so
@@ -377,7 +425,7 @@ class BaseQueryIndexer(ABC):
         CALL apoc.export.json.query(
             "{escaped_query}",
             null,
-            {{stream: true, timeoutSeconds: 7200, batchSize: 20, params: $params}}
+            {{stream: true, timeoutSeconds: {EXPORT_STREAM_TIMEOUT_SECONDS}, batchSize: 20, params: $params}}
         ) YIELD data
         RETURN data
         """
