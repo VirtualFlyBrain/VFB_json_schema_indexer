@@ -186,6 +186,13 @@ class BaseQueryIndexer(ABC):
 
         neo4j_import_dir = '/import'  # Neo4j server import directory
         jenkins_import_dir = '/PDBupgrade/import'  # Jenkins accessible directory
+        # EXPORT_MODE=stream: APOC streams the export back in the HTTP response instead of writing a file
+        # into the Neo4j import dir. For runners that share no filesystem with Neo4j (Kubernetes); needs no
+        # apoc.export.file.enabled. Default "file" keeps the Jenkins behaviour (shared /PDBupgrade/import).
+        stream_mode = os.environ.get('EXPORT_MODE', 'file').lower() == 'stream'
+        if stream_mode:
+            jenkins_import_dir = os.environ.get('EXPORT_LOCAL_DIR', '/tmp/vfb_json_export')
+            os.makedirs(jenkins_import_dir, exist_ok=True)
 
         all_data = {}  # Initialize the dictionary to collect Solr documents
 
@@ -197,13 +204,21 @@ class BaseQueryIndexer(ABC):
             output_filename = f"output_{i}.json"
             output_file_path = f"file://{neo4j_import_dir}/{output_filename}"
 
-            # Execute the query and export to file
-            self.execute_query(vfb_json_query, params={'ids': chunk}, output_file=output_file_path)
-
-            # Wait for the file to be written
             exported_file_path = os.path.join(jenkins_import_dir, output_filename)
-            while not os.path.exists(exported_file_path):
-                time.sleep(1)  # Wait for 1 second before checking again
+            if stream_mode:
+                # Same JSON-lines content APOC would have written, written locally
+                streamed = self.execute_query(vfb_json_query, params={'ids': chunk}, output_file=None)
+                with open(exported_file_path, 'w', encoding='utf-8') as f:
+                    for part in streamed:
+                        if part:
+                            f.write(part if part.endswith('\n') else part + '\n')
+            else:
+                # Execute the query and export to file
+                self.execute_query(vfb_json_query, params={'ids': chunk}, output_file=output_file_path)
+
+                # Wait for the file to be written
+                while not os.path.exists(exported_file_path):
+                    time.sleep(1)  # Wait for 1 second before checking again
 
             # Process the file and collect the data
             batch_data = self.process_exported_file(exported_file_path)
@@ -345,18 +360,29 @@ class BaseQueryIndexer(ABC):
             )
             time.sleep(sleep_time)
 
-    def execute_query(self, query: str, params: Dict = None, output_file: str = None) -> None:
+    def execute_query(self, query: str, params: Dict = None, output_file: str = None):
         """
-        Executes given Cypher query in Neo4j and exports the result to a file on the server.
+        Executes given Cypher query in Neo4j and exports the result as JSON lines.
         :param query: Cypher query to execute
         :param params: Query parameters
-        :param output_file: Path to the output file on the Neo4j server (e.g., "file:///import/output.json")
+        :param output_file: Path to the output file on the Neo4j server (e.g., "file:///import/output.json").
+            None = stream the export back ({stream: true}) and return the list of JSON-lines strings.
         """
         # Escape double quotes in the query
         escaped_query = query.replace('"', '\\"')
 
         # Construct the export query
-        export_query = f"""
+        if output_file is None:
+            export_query = f"""
+        CALL apoc.export.json.query(
+            "{escaped_query}",
+            null,
+            {{stream: true, timeoutSeconds: 7200, batchSize: 20, params: $params}}
+        ) YIELD data
+        RETURN data
+        """
+        else:
+            export_query = f"""
         CALL apoc.export.json.query(
             "{escaped_query}",
             "{output_file}",
@@ -392,6 +418,9 @@ class BaseQueryIndexer(ABC):
                     log.error(f"Neo4j returned errors: {response_json['errors']}")
                     raise Neo4jQueryException(f"Query failed with errors: {response_json['errors']}")
                 log.info(f"Exported data For {params['ids'][0]} to {params['ids'][-1]}")
+                if output_file is None:
+                    rows = response_json['results'][0]['data'] if response_json.get('results') else []
+                    return [r['row'][0] for r in rows]
                 return
             except requests.exceptions.RequestException as e:
                 attempt += 1
