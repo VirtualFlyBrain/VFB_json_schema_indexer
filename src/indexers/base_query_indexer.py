@@ -377,7 +377,7 @@ class BaseQueryIndexer(ABC):
         CALL apoc.export.json.query(
             "{escaped_query}",
             null,
-            {{stream: true, batchSize: 20, params: $params}}
+            {{stream: true, timeoutSeconds: 7200, batchSize: 20, params: $params}}
         ) YIELD data
         RETURN data
         """
