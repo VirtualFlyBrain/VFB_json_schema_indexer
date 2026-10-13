@@ -156,6 +156,44 @@ def fetch_ids_with_field(ids: Iterable[str], service_name: str) -> Set[str]:
         return set()
 
 
+def fetch_field_values(ids: Iterable[str], service_name: str) -> Optional[Dict[str, str]]:
+    """Current value of ``service_name`` for each of *ids* that has one, as stored in Solr.
+
+    Used to tell which documents a refresh actually changes. Returns None when
+    Solr cannot be read, so callers can treat every id as changed rather than
+    silently reporting nothing.
+    """
+    solr_select_url = get_solr_select_url()
+    id_list = [i for i in ids if i]
+    if not solr_select_url or not id_list:
+        return {} if solr_select_url else None
+    values: Dict[str, str] = {}
+    try:
+        for start in range(0, len(id_list), SOLR_EXISTENCE_PROBE_CHUNK):
+            chunk = id_list[start:start + SOLR_EXISTENCE_PROBE_CHUNK]
+            response = _SESSION.post(
+                solr_select_url,
+                data={
+                    "q": "{!terms f=id}" + ",".join(chunk),
+                    "fl": f"id,{service_name}",
+                    "rows": str(len(chunk)),
+                    "wt": "json",
+                },
+                timeout=SOLR_WRITE_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            for doc in response.json().get("response", {}).get("docs", []):
+                value = doc.get(service_name)
+                if isinstance(value, list):
+                    value = value[0] if value else None
+                if doc.get("id") and value is not None:
+                    values[doc["id"]] = value
+        return values
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        log.warning(f"Could not read current '{service_name}' values: {exc}. Treating the batch as changed.")
+        return None
+
+
 # ---- Write helpers ----
 
 def send_solr_docs(solr_docs: Sequence[Dict], service_name: str) -> bool:
