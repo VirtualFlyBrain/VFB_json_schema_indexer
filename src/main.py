@@ -73,6 +73,18 @@ def main() -> None:
     # Combine the indexers
     indexers = term_info_indexers + other_indexers
 
+    # SKIP_INDEXERS: comma-separated indexer class names to leave out of this run, e.g.
+    # SKIP_INDEXERS=Template2ROIbrowserQueryIndexer. That indexer re-crawls all 10 templates (~2 h each) on every run
+    # because its documents are keyed by dataset id, so its "existing" probe on template ids always finds none.
+    skip_names = {n.strip() for n in os.getenv("SKIP_INDEXERS", "").split(",") if n.strip()}
+    if skip_names:
+        known = {type(i).__name__ for i in indexers}
+        unknown = skip_names - known
+        if unknown:
+            raise ValueError("SKIP_INDEXERS names no known indexer: " + ", ".join(sorted(unknown)))
+        indexers = [i for i in indexers if type(i).__name__ not in skip_names]
+        log.info("Skipping indexers: " + ", ".join(sorted(skip_names)))
+
     all_data = dict()
 
     # Progress tracker — persists state to $WORKSPACE/indexer_progress.json (or
